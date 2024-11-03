@@ -8,6 +8,25 @@ from node.io_thread import IoThread
 
 io_thread_inbox = queue.Queue()
 
+class IoErrorDialog(QDialog):
+    def __init__(self, e: str):
+        self.error_string = e
+        super().__init__()
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        self.label = QLabel("The I/O thread encountered an error:")
+        layout.addWidget(self.label)
+
+        self.label2 = QLabel(self.error_string)
+        layout.addWidget(self.label2)
+
+        self.setLayout(layout)
+        self.setMinimumWidth(600)
+        self.setWindowTitle("I/O thread error")
+
 class TorrentCreationDialog(QDialog):
     def __init__(self):
         super().__init__()
@@ -120,14 +139,18 @@ class MainWindow(QWidget):
         self.setFixedSize(1280, 720)
 
     def open_torrent_creation_dialog(self):
-        dialog = TorrentCreationDialog()
-        dialog.exec()
+        TorrentCreationDialog().exec()
 
     def on_add_magnet_link(self):
         io_thread_inbox.put(("add_magnet_link", self.magnet_link_input.text()))
 
     def on_message_received(self, message):
-        self.label.setText(f"Received: {message}")
+        message_type = message[0]
+        if message_type == "io_error":
+            _, error_string = message
+            IoErrorDialog(error_string).exec()
+        elif message == "io_hi":
+            self.label.setText(f"I/O thread says hi.")
 
     def closeEvent(self, event):
         io_thread_inbox.put("ui_quit")

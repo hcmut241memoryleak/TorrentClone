@@ -9,11 +9,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
 from hashing import base62_sha1_hash_of
-from peer_data import generate_unique_id, PeerData
-from torrent_file import TorrentFile, pack_files_to_pieces, Piece
+from node.torrenting import LiveTorrent
+from peer_info import generate_unique_id, PeerInfo
+from torrent_data import TorrentFile, pack_files_to_pieces, Piece, Torrent
 
-TRACKER_HOST = '127.0.0.1'
-TRACKER_PORT = 65432
+TARGET_TRACKER_HOST = '127.0.0.1'
+TARGET_TRACKER_PORT = 65432
+
 PEER_HOST = '127.0.0.1'
 PEER_PORT = 65433
 
@@ -44,22 +46,25 @@ def initiate_piece_hashes(base_path: str, files: list[TorrentFile], pieces: list
             data += b"\x00" * (piece_size - len(data))
         piece.base_62_sha1 = base62_sha1_hash_of(data)
 
-def create_torrent_from_path(raw_path: str, piece_size: int):
+def create_live_torrent_from_path(raw_path: str, piece_size: int):
     base_path, files = files_from_path(raw_path)
     torrent_files = list(map(lambda file: TorrentFile(file, os.path.getsize(os.path.join(base_path, file))), files))
     pieces = pack_files_to_pieces(torrent_files, piece_size)
     initiate_piece_hashes(base_path, torrent_files, pieces, piece_size)
 
-    for piece in pieces:
-        print(piece)
+    torrent = Torrent(torrent_files, pieces)
+    live_torrent = LiveTorrent.from_torrent(base_path, torrent)
 
-def send_message(harbor: Harbor, sock: socket, message):
+    return live_torrent
+
+def send_message(ui_thread_inbox: pyqtSignal, harbor: Harbor, sock: socket, message):
     try:
         message_data = json.dumps(message).encode("utf-8")
         packed_data = struct.pack(">I", len(message_data)) + message_data
         sock.sendall(packed_data)
     except Exception as e:
         print(f"Error sending data to {sock.getpeername()}: {e}")
+        ui_thread_inbox.emit(("io_error", f"Error sending data to {sock.getpeername()}: {e}"))
         harbor.socket_receiver_queue_remove_client_command(sock)
 
 class IoThread(QThread):
@@ -74,9 +79,13 @@ class IoThread(QThread):
         my_peer_id = generate_unique_id()
         print(f"I/O thread: ID is {my_peer_id}")
 
+        my_peer_info = PeerInfo()
+        my_peer_info.peer_id = my_peer_id
+        my_peer_info.peer_port = PEER_PORT
+
         executor = ThreadPoolExecutor(max_workers=5)
 
-        peers: dict[socket.socket, PeerData] = {}
+        peers: dict[socket.socket, PeerInfo] = {}
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind((PEER_HOST, PEER_PORT))
@@ -87,11 +96,11 @@ class IoThread(QThread):
         harbor.start()
 
         tracker_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tracker_sock.connect((TRACKER_HOST, TRACKER_PORT))
-        print(f"I/O thread: connected to tracker {TRACKER_HOST}:{TRACKER_PORT}. Adding to Harbor.")
+        tracker_sock.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
+        print(f"I/O thread: connected to tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT}. Adding to Harbor.")
         harbor.socket_receiver_queue_add_client_command(tracker_sock)
 
-        self.ui_thread_inbox_ready.emit(("string_message", "hi"))
+        self.ui_thread_inbox_ready.emit("io_hi")
 
         stop_requested = False
         keep_running = True
@@ -102,8 +111,8 @@ class IoThread(QThread):
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
                     if sock == tracker_sock:
-                        print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending ID.")
-                        executor.submit(send_message, harbor, sock, ("peer_id", my_peer_id))
+                        print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending info.")
+                        executor.submit(send_message, self.ui_thread_inbox_ready, harbor, sock, ("peer_info", my_peer_info.to_json()))
                     else:
                         print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
                 elif message_type == "harbor_connection_removed":
@@ -132,7 +141,7 @@ class IoThread(QThread):
                 elif message_type == "ui_create_torrent":
                     _, path, piece_size = message
                     if os.path.exists(path):
-                        create_torrent_from_path(path, piece_size)
+                        print(create_live_torrent_from_path(path, piece_size).torrent_json)
 
                 elif message == "ui_quit":
                     stop_requested = True
@@ -141,9 +150,6 @@ class IoThread(QThread):
                     print(f"I/O thread: I/O message: {message}")
             except queue.Empty:
                 continue
-            except KeyboardInterrupt:
-                stop_requested = True
-
             if stop_requested:
                 stop_requested = False
                 print("I/O thread: stopping Harbor...")

@@ -5,7 +5,7 @@ import struct
 import queue
 
 from harbor import Harbor
-from peer_data import PeerData
+from peer_info import PeerInfo
 
 TRACKER_HOST = '127.0.0.1'
 TRACKER_PORT = 65432
@@ -24,7 +24,7 @@ def send_message(harbor: Harbor, sock: socket, message):
 def main():
     executor = ThreadPoolExecutor(max_workers=5)
 
-    peers: dict[socket.socket, PeerData] = {}
+    peers: dict[socket.socket, PeerInfo] = {}
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((TRACKER_HOST, TRACKER_PORT))
@@ -45,7 +45,7 @@ def main():
                 print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
                 executor.submit(send_message, harbor, sock, ("motd", "From central tracker: have a great day!"))
 
-                peers[sock] = PeerData()
+                peers[sock] = PeerInfo()
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name, caused_by_stop = message
                 print(f"I/O thread: disconnected from peer {peer_name[0]}:{peer_name[1]}.")
@@ -55,11 +55,12 @@ def main():
                 _, sock, peer_name, msg = message
                 try:
                     msg_command_type = msg[0]
-                    if msg_command_type == "peer_id":
-                        _, peer_id = msg
+                    if msg_command_type == "peer_info":
+                        _, json_info = msg
                         if sock in peers:
-                            peers[sock].peer_id = peer_id
-                            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} identifies with ID `{peer_id}`")
+                            info = PeerInfo.from_json(json_info)
+                            peers[sock].peer_id = info
+                            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
                     else:
                         print(f"I/O thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
                 except Exception as e:
