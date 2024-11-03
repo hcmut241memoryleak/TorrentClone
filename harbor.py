@@ -7,7 +7,18 @@ import struct
 import queue
 
 class Harbor:
-    def __init__(self, server_socket, main_thread_inbox: queue.Queue):
+    __server_socket: socket.socket
+    __main_thread_inbox: queue.Queue
+    __connections: dict[socket, tuple[str, int]]
+    __connections_lock: threading.Lock
+    __socket_receiver_daemon_inbox: queue.Queue
+    __socket_receiver_daemon_signal_r: socket.socket
+    __socket_receiver_daemon_signal_w: socket.socket
+    __daemons_stop_event: threading.Event
+    __sock_recv_thread: threading.Thread | None
+    __sock_accp_thread: threading.Thread | None
+
+    def __init__(self, server_socket: socket.socket, main_thread_inbox: queue.Queue):
         self.__server_socket = server_socket
         self.__main_thread_inbox = main_thread_inbox
         self.__connections = {}
