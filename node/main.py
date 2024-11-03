@@ -72,7 +72,7 @@ class TorrentCreationDialog(QDialog):
 
         self.create_button = QPushButton("Create")
         self.create_button.setMinimumWidth(250)
-        self.create_button.clicked.connect(self.create)
+        self.create_button.clicked.connect(self.create_torrent)
         create_layout.addWidget(self.create_button, 0)
 
         layout.addLayout(create_layout)
@@ -92,7 +92,7 @@ class TorrentCreationDialog(QDialog):
         if path:
             self.path_input.setText(path)
 
-    def create(self):
+    def create_torrent(self):
         path = self.path_input.text()
         if path != "":
             piece_sizes = [
