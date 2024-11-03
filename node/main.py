@@ -1,115 +1,12 @@
-from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
-    QLineEdit
+    QLineEdit, QComboBox
 
 import sys
-import socket
-import threading
-from concurrent.futures import ThreadPoolExecutor
-import json
-import struct
 import queue
 
-from harbor import Harbor
-from peer_data import generate_unique_id, PeerData
-from torrent_file import TorrentFile, pack_files_to_pieces
-
-TRACKER_HOST = '127.0.0.1'
-TRACKER_PORT = 65432
-PEER_HOST = '127.0.0.1'
-PEER_PORT = 65433
+from node.io_thread import IoThread
 
 io_thread_inbox = queue.Queue()
-
-def send_message(harbor: Harbor, sock: socket, message):
-    try:
-        message_data = json.dumps(message).encode("utf-8")
-        packed_data = struct.pack(">I", len(message_data)) + message_data
-        sock.sendall(packed_data)
-    except Exception as e:
-        print(f"Error sending data to {sock.getpeername()}: {e}")
-        harbor.socket_receiver_queue_remove_client_command(sock)
-
-class IoThread(QThread):
-    ui_thread_inbox_ready = pyqtSignal(object)
-
-    def run(self):
-        my_peer_id = generate_unique_id()
-        print(f"I/O thread: ID is {my_peer_id}")
-
-        executor = ThreadPoolExecutor(max_workers=5)
-
-        peers: dict[socket.socket, PeerData] = {}
-
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((PEER_HOST, PEER_PORT))
-        server_socket.listen()
-        print(f"I/O thread: listening on {PEER_HOST}:{PEER_PORT} for other peers...")
-
-        harbor = Harbor(server_socket, io_thread_inbox)
-        harbor.start()
-
-        tracker_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tracker_sock.connect((TRACKER_HOST, TRACKER_PORT))
-        print(f"I/O thread: connected to tracker {TRACKER_HOST}:{TRACKER_PORT}. Adding to Harbor.")
-        harbor.socket_receiver_queue_add_client_command(tracker_sock)
-
-        self.ui_thread_inbox_ready.emit(("string_message", "hi"))
-
-        stop_requested = False
-        keep_running = True
-        while keep_running:
-            try:
-                message = io_thread_inbox.get(timeout=0.1)
-                message_type = message[0]
-                if message_type == "harbor_connection_added":
-                    _, sock, peer_name = message
-                    if sock == tracker_sock:
-                        print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending ID.")
-                        executor.submit(send_message, harbor, sock, ("peer_id", my_peer_id))
-                    else:
-                        print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
-                elif message_type == "harbor_connection_removed":
-                    _, sock, peer_name, caused_by_stop = message
-                    if sock == tracker_sock:
-                        if caused_by_stop:
-                            print(f"I/O thread: disconnected from tracker {peer_name[0]}:{peer_name[1]}.")
-                        else:
-                            print(f"I/O thread: disconnected from tracker {peer_name[0]}:{peer_name[1]}! Stopping.")
-                            stop_requested = True
-                elif message_type == "harbor_message":
-                    _, sock, peer_name, msg = message
-                    if sock == tracker_sock:
-                        msg_command_type = msg[0]
-                        if msg_command_type == "motd":
-                            _, motd = msg
-                            print(f"I/O thread: MOTD from tracker {peer_name[0]}:{peer_name[1]}: `{motd}`")
-                        else:
-                            print(f"I/O thread: message from tracker {peer_name[0]}:{peer_name[1]}: {msg}")
-                    else:
-                        print(f"I/O thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
-                elif message == "harbor_stopped":
-                    print(f"I/O thread: Harbor stopped.")
-                    keep_running = False
-                elif message == "ui_quit":
-                    stop_requested = True
-                else:
-                    print(f"I/O thread: I/O message: {message}")
-            except queue.Empty:
-                continue
-            except KeyboardInterrupt:
-                stop_requested = True
-
-            if stop_requested:
-                stop_requested = False
-                print("I/O thread: stopping Harbor...")
-                harbor.stop()
-
-        executor.shutdown()
-        print("I/O thread: bye")
-
-def quit_io_thread():
-    io_thread_inbox.put("ui_quit")
 
 class TorrentCreationDialog(QDialog):
     def __init__(self):
@@ -119,38 +16,84 @@ class TorrentCreationDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout()
 
+        # Path | Select file | Select folder
+
+        path_selection_layout = QHBoxLayout()
+
+        self.path_input = QLineEdit()
+        self.path_input.setPlaceholderText("Path...")
+        path_selection_layout.addWidget(self.path_input)
+
         self.file_button = QPushButton("Select file")
         self.file_button.clicked.connect(self.select_file)
-        layout.addWidget(self.file_button)
+        path_selection_layout.addWidget(self.file_button, 0)
 
         self.folder_button = QPushButton("Select folder")
         self.folder_button.clicked.connect(self.select_folder)
-        layout.addWidget(self.folder_button)
+        path_selection_layout.addWidget(self.folder_button, 0)
+
+        layout.addLayout(path_selection_layout)
+
+        # Piece size: [combo box] | Create
+
+        create_layout = QHBoxLayout()
+
+        self.piece_size_combobox_label = QLabel("Piece size")
+        create_layout.addWidget(self.piece_size_combobox_label, 0)
+
+        self.piece_size_combobox = QComboBox()
+        self.piece_size_combobox.addItem('128 KiB')
+        self.piece_size_combobox.addItem('256 KiB')
+        self.piece_size_combobox.addItem('512 KiB')
+        self.piece_size_combobox.addItem('1 MiB')
+        self.piece_size_combobox.setCurrentIndex(1)
+        create_layout.addWidget(self.piece_size_combobox, 0)
+
+        create_layout.addWidget(QWidget(), 1)
+
+        self.create_button = QPushButton("Create")
+        self.create_button.setMinimumWidth(250)
+        self.create_button.clicked.connect(self.create)
+        create_layout.addWidget(self.create_button, 0)
+
+        layout.addLayout(create_layout)
 
         self.setLayout(layout)
+        self.setMinimumWidth(600)
         self.setWindowTitle("Torrent Creation")
-        self.setGeometry(400, 400, 250, 100)
 
     def select_file(self):
         options = QFileDialog.Option.ReadOnly
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select a file", "", "All Files (*)", options=options)
-        if file_path:
-            io_thread_inbox.put(("create_torrent", file_path))
+        path, _ = QFileDialog.getOpenFileName(self, "Select a file", "", "All Files (*)", options=options)
+        if path:
+            self.path_input.setText(path)
 
     def select_folder(self):
-        """Open a folder dialog to select a folder."""
-        folder_path = QFileDialog.getExistingDirectory(self, "Select a folder", "")
-        if folder_path:
-            io_thread_inbox.put(("create_torrent", folder_path))
+        path = QFileDialog.getExistingDirectory(self, "Select a folder", "")
+        if path:
+            self.path_input.setText(path)
+
+    def create(self):
+        path = self.path_input.text()
+        if path != "":
+            piece_sizes = [
+                2 ** 17, # 128 KiB
+                2 ** 18, # 256 KiB
+                2 ** 19, # 512 KiB
+                2 ** 20 # 1 MiB
+            ]
+            piece_size = piece_sizes[self.piece_size_combobox.currentIndex()]
+            io_thread_inbox.put(("ui_create_torrent", path, piece_size))
+            self.close()
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
 
-        # Start the I/O thread
-        self.io_thread = IoThread()
+        self.io_thread = IoThread(io_thread_inbox)
         self.io_thread.ui_thread_inbox_ready.connect(self.on_message_received)
+        self.io_thread.io_thread_inbox = io_thread_inbox
         self.io_thread.start()
 
     def init_ui(self):
@@ -175,10 +118,6 @@ class MainWindow(QWidget):
         self.setLayout(layout)
         self.setWindowTitle("HK241/MemoryLeak: TorrentClone (Qt UI)")
         self.setFixedSize(1280, 720)
-
-    # def send_message(self):
-    #     io_thread_inbox.put("hi")
-    #     self.label.setText("Message sent to I/O thread.")
 
     def open_torrent_creation_dialog(self):
         dialog = TorrentCreationDialog()
