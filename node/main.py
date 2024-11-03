@@ -66,7 +66,12 @@ def main():
             elif message_type == "harbor_message":
                 _, sock, peer_name, msg = message
                 if sock == tracker_sock:
-                    print(f"Main thread: message from tracker {peer_name[0]}:{peer_name[1]}: {msg}")
+                    msg_command_type = msg[0]
+                    if msg_command_type == "motd":
+                        _, motd = msg
+                        print(f"Main thread: MOTD from tracker {peer_name[0]}:{peer_name[1]}: {motd}")
+                    else:
+                        print(f"Main thread: message from tracker {peer_name[0]}:{peer_name[1]}: {msg}")
                 else:
                     print(f"Main thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
             elif message == "harbor_stopped":
@@ -82,7 +87,6 @@ def main():
             print("Main thread: stopping Harbor...")
             harbor.stop()
 
-    harbor.join()
     executor.shutdown()
     print("Main thread: bye")
 
