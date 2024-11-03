@@ -36,8 +36,8 @@ def main():
             message = main_thread_inbox.get(timeout=0.1)
             message_type = message[0]
             if message_type == "harbor_connection_added":
-                _, sock = message
-                print(f"Main thread: connected to {sock.getpeername()}.")
+                _, sock, peer_name = message
+                print(f"Main thread: connected to {peer_name}.")
                 executor.submit(send_message, harbor, sock, "From tracker: hello peer!")
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name = message

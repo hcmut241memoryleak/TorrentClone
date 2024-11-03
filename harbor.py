@@ -9,7 +9,7 @@ import queue
 class Harbor:
     __server_socket: socket.socket
     __main_thread_inbox: queue.Queue
-    __connections: dict[socket, tuple[str, int]]
+    __connections: set[socket]
     __connections_lock: threading.Lock
     __socket_receiver_daemon_inbox: queue.Queue
     __socket_receiver_daemon_signal_r: socket.socket
@@ -21,7 +21,7 @@ class Harbor:
     def __init__(self, server_socket: socket.socket, main_thread_inbox: queue.Queue):
         self.__server_socket = server_socket
         self.__main_thread_inbox = main_thread_inbox
-        self.__connections = {}
+        self.__connections = set()
         self.__connections_lock = threading.Lock()
         self.__socket_receiver_daemon_inbox = queue.Queue()
         self.__socket_receiver_daemon_signal_r, self.__socket_receiver_daemon_signal_w = socket.socketpair()
@@ -67,7 +67,7 @@ class Harbor:
     def __socket_receiver_daemon(self):
         while not self.__daemons_stop_event.is_set():
             with self.__connections_lock:
-                monitored_sockets = [self.__socket_receiver_daemon_signal_r] + list(self.__connections.keys())
+                monitored_sockets = [self.__socket_receiver_daemon_signal_r] + list(self.__connections)
 
             readable_socks, _, _ = select.select(monitored_sockets, [], [], 1)  # Adding a timeout for select
             for selected_sock in readable_socks:
@@ -79,20 +79,21 @@ class Harbor:
                         with self.__connections_lock:
                             if command_type == "+":
                                 command_sock = command[1]
-                                self.__connections[command_sock] = command_sock.getpeername()
-                                self.__main_thread_inbox.put(("harbor_connection_added", command_sock))
+                                peer_name = command_sock.getpeername()
+                                self.__connections.add(command_sock)
+                                self.__main_thread_inbox.put(("harbor_connection_added", command_sock, peer_name))
                             elif command_type == "-":
                                 command_sock = command[1]
                                 if command_sock in self.__connections:
                                     peer_name = command_sock.getpeername()
-                                    del self.__connections[command_sock]
+                                    self.__connections.remove(command_sock)
                                     try:
                                         command_sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
                                     self.__main_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name))
                             elif command_type == "x":
-                                for sock in list(self.__connections.keys()):
+                                for sock in self.__connections:
                                     peer_name = sock.getpeername()
                                     try:
                                         sock.close()
