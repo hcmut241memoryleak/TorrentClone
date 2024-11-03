@@ -1,36 +1,64 @@
-from socket import *
+import socket
+from concurrent.futures import ThreadPoolExecutor
 import json
 import struct
+import queue
 
-SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 65432
+from harbor import Harbor
+
+TRACKER_HOST = '127.0.0.1'
+TRACKER_PORT = 65432
+PEER_HOST = '127.0.0.1'
+PEER_PORT = 65433
+MAX_CONNECTIONS = 16
+
+main_thread_inbox = queue.Queue()
+
+def send_message(harbor: Harbor, sock: socket, message):
+    try:
+        message_data = json.dumps(message).encode("utf-8")
+        packed_data = struct.pack(">I", len(message_data)) + message_data
+        sock.sendall(packed_data)
+    except Exception as e:
+        print(f"Error sending data to {sock.getpeername()}: {e}")
+        harbor.socket_receiver_queue_remove_client_command(sock)
 
 def main():
-    print("Client: Hi")
+    executor = ThreadPoolExecutor(max_workers=5)
 
-    sock = socket(AF_INET, SOCK_STREAM)
-    sock.connect((SERVER_HOST, SERVER_PORT))
-    while True:
-        try:
-            raw_msg_len = sock.recv(4)
-            if not raw_msg_len:
-                break
-            msg_len = struct.unpack('>I', raw_msg_len)[0]
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((PEER_HOST, PEER_PORT))
+    server_socket.listen(MAX_CONNECTIONS)
+    print(f"Main thread: listening on {PEER_HOST}:{PEER_PORT} for other peers...")
 
-            data = b""
-            while len(data) < msg_len:
-                packet = sock.recv(msg_len - len(data))
-                if not packet:
-                    break
-                data += packet
+    harbor = Harbor(server_socket, main_thread_inbox)
+    harbor.start()
 
-            json_data = json.loads(data.decode('utf-8'))
-            print(f"Received from server: {json_data}")
+    tracker_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tracker_sock.connect((TRACKER_HOST, TRACKER_PORT))
+    print(f"Main thread: connected to tracker {TRACKER_HOST}:{TRACKER_PORT}. Adding to Harbor.")
+    harbor.socket_receiver_queue_add_client_command(tracker_sock)
 
-        except Exception as e:
-            print(f"Error receiving message: {e}")
-            break
-    sock.close()
+    try:
+        while True:
+            try:
+                message = main_thread_inbox.get(timeout=0.1)
+                message_type = message[0]
+                if message_type == "harbor_connection_added":
+                    _, sock = message
+                    print(f"Main thread: connected to {sock.getpeername()}.")
+
+                    if sock == tracker_sock:
+                        executor.submit(send_message, harbor, sock, "Hello to tracker")
+                elif message_type == "harbor_connection_removed":
+                    _, sock, peer_name = message
+                    print(f"Main thread: connection to {peer_name} removed.")
+            except queue.Empty:
+                continue
+    except KeyboardInterrupt:
+        print("Shutting down server...")
+        harbor.stop()
+        print("Server shut down successfully.")
 
 if __name__ == "__main__":
     main()
