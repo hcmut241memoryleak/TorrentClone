@@ -8,7 +8,7 @@ import queue
 
 class Harbor:
     __server_socket: socket.socket
-    __main_thread_inbox: queue.Queue
+    __io_thread_inbox: queue.Queue
     __connections: set[socket]
     __connections_lock: threading.Lock
     __socket_receiver_daemon_inbox: queue.Queue
@@ -18,9 +18,9 @@ class Harbor:
     __sock_recv_thread: threading.Thread | None
     __sock_accp_thread: threading.Thread | None
 
-    def __init__(self, server_socket: socket.socket, main_thread_inbox: queue.Queue):
+    def __init__(self, server_socket: socket.socket, io_thread_inbox: queue.Queue):
         self.__server_socket = server_socket
-        self.__main_thread_inbox = main_thread_inbox
+        self.__io_thread_inbox = io_thread_inbox
         self.__connections = set()
         self.__connections_lock = threading.Lock()
         self.__socket_receiver_daemon_inbox = queue.Queue()
@@ -46,7 +46,7 @@ class Harbor:
                 data += packet
 
             json_data = json.loads(data.decode("utf-8"))
-            self.__main_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
+            self.__io_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
             return True
 
         except Exception as e:
@@ -82,7 +82,7 @@ class Harbor:
                                 command_sock = command[1]
                                 peer_name = command_sock.getpeername()
                                 self.__connections.add(command_sock)
-                                self.__main_thread_inbox.put(("harbor_connection_added", command_sock, peer_name))
+                                self.__io_thread_inbox.put(("harbor_connection_added", command_sock, peer_name))
                             elif command_type == "-":
                                 command_sock = command[1]
                                 if command_sock in self.__connections:
@@ -92,7 +92,7 @@ class Harbor:
                                         command_sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                    self.__main_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name, False))
+                                    self.__io_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name, False))
                             elif command_type == "x":
                                 for sock in self.__connections:
                                     peer_name = sock.getpeername()
@@ -100,9 +100,9 @@ class Harbor:
                                         sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                    self.__main_thread_inbox.put(("harbor_connection_removed", sock, peer_name, True))
+                                    self.__io_thread_inbox.put(("harbor_connection_removed", sock, peer_name, True))
                                 self.__connections.clear()
-                                self.__main_thread_inbox.put("harbor_stopped")
+                                self.__io_thread_inbox.put("harbor_stopped")
                     break
                 else:
                     if not self.__handle_incoming_data(selected_sock):
