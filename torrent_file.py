@@ -27,7 +27,7 @@ class PieceSection:
         self.piece_offset = piece_offset
 
     def __repr__(self):
-        return f"PieceSection(file_index={self.file_index}, file_offset={self.file_offset}, piece_offset={self.piece_offset}, length={self.length})"
+        return f"PieceSection(length={self.length}, file_index={self.file_index}, file_offset={self.file_offset}, piece_offset={self.piece_offset})"
 
 class Piece:
     def __init__(self):
