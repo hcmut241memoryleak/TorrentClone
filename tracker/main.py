@@ -8,7 +8,6 @@ from harbor import Harbor
 
 TRACKER_HOST = '127.0.0.1'
 TRACKER_PORT = 65432
-MAX_CONNECTIONS = 16
 
 main_thread_inbox = queue.Queue()
 
@@ -26,12 +25,11 @@ def main():
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((TRACKER_HOST, TRACKER_PORT))
-    server_socket.listen(MAX_CONNECTIONS)
+    server_socket.listen()
     print(f"Listening on {TRACKER_HOST}:{TRACKER_PORT} for incoming peers...")
 
     harbor = Harbor(server_socket, main_thread_inbox)
     harbor.start()
-
 
     while True:
         try:

@@ -10,7 +10,6 @@ TRACKER_HOST = '127.0.0.1'
 TRACKER_PORT = 65432
 PEER_HOST = '127.0.0.1'
 PEER_PORT = 65433
-MAX_CONNECTIONS = 16
 
 main_thread_inbox = queue.Queue()
 
@@ -28,7 +27,7 @@ def main():
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((PEER_HOST, PEER_PORT))
-    server_socket.listen(MAX_CONNECTIONS)
+    server_socket.listen()
     print(f"Main thread: listening on {PEER_HOST}:{PEER_PORT} for other peers...")
 
     harbor = Harbor(server_socket, main_thread_inbox)
