@@ -111,7 +111,7 @@ class MainWindow(QWidget):
         self.init_ui()
 
         self.io_thread = IoThread(io_thread_inbox)
-        self.io_thread.ui_thread_inbox_ready.connect(self.on_message_received)
+        self.io_thread.ui_thread_inbox.connect(self.on_message_received)
         self.io_thread.io_thread_inbox = io_thread_inbox
         self.io_thread.start()
 
@@ -130,7 +130,7 @@ class MainWindow(QWidget):
         self.add_magnet_link_button.clicked.connect(self.on_add_magnet_link)
         magnet_link_layout.addWidget(self.add_magnet_link_button)
 
-        self.label = QLabel("Waiting for messages...")
+        self.label = QLabel("Connecting to central tracker...")
         layout.addLayout(magnet_link_layout)
         layout.addWidget(self.label)
 
@@ -150,7 +150,7 @@ class MainWindow(QWidget):
             _, error_string = message
             IoErrorDialog(error_string).exec()
         elif message == "io_hi":
-            self.label.setText(f"I/O thread says hi.")
+            self.label.setText(f"I/O thread has connected to the central tracker and says hi.")
 
     def closeEvent(self, event):
         io_thread_inbox.put("ui_quit")

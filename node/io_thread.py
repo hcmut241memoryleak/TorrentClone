@@ -68,7 +68,7 @@ def send_message(ui_thread_inbox: pyqtSignal, harbor: Harbor, sock: socket, mess
         harbor.socket_receiver_queue_remove_client_command(sock)
 
 class IoThread(QThread):
-    ui_thread_inbox_ready = pyqtSignal(object)
+    ui_thread_inbox = pyqtSignal(object)
     io_thread_inbox: queue.Queue
 
     def __init__(self, io_thread_inbox: queue.Queue):
@@ -97,11 +97,15 @@ class IoThread(QThread):
         harbor.start()
 
         tracker_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tracker_sock.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
+        try:
+            tracker_sock.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
+        except ConnectionRefusedError as e:
+            self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
+            return
         print(f"I/O thread: connected to tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT}. Adding to Harbor.")
         harbor.socket_receiver_queue_add_client_command(tracker_sock)
 
-        self.ui_thread_inbox_ready.emit("io_hi")
+        self.ui_thread_inbox.emit("io_hi")
 
         stop_requested = False
         keep_running = True
@@ -114,7 +118,7 @@ class IoThread(QThread):
                     if sock == tracker_sock:
                         print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending info.")
                         outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
-                        executor.submit(send_message, self.ui_thread_inbox_ready, harbor, sock, outgoing_msg)
+                        executor.submit(send_message, self.ui_thread_inbox, harbor, sock, outgoing_msg)
                     else:
                         print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
                 elif message_type == "harbor_connection_removed":
@@ -145,6 +149,7 @@ class IoThread(QThread):
                     if os.path.exists(path):
                         torrent_json, persistent_state = create_persistent_torrent_state_from_path(path, piece_size)
                         torrent_states[persistent_state.torrent_hash] = EphemeralTorrentState(torrent_json, persistent_state)
+                        print(torrent_json)
 
                 elif message == "ui_quit":
                     stop_requested = True
@@ -152,6 +157,11 @@ class IoThread(QThread):
                 else:
                     print(f"I/O thread: I/O message: {message}")
             except queue.Empty:
+                # TODO: torrent announce
+                for peer_socket, peer_info in peers.items():
+                    if peer_socket != tracker_sock:
+                        executor.submit(send_message, self.ui_thread_inbox, harbor, peer_socket, ("greet", "From peer: have a great day!"))
+
                 continue
             if stop_requested:
                 stop_requested = False
