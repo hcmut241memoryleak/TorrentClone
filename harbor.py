@@ -132,8 +132,6 @@ class Harbor:
 
     def stop(self):
         self.socket_receiver_queue_stop_command()
-
-    def join(self):
         self.__daemons_stop_event.set()
         self.__socket_receiver_daemon_signal_w.send(b'\x01')
         self.__sock_recv_thread.join()
