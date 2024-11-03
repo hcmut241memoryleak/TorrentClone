@@ -38,8 +38,7 @@ class Harbor:
             return True
 
         except Exception as e:
-            print(f"Harbor @ receiver thread: error handling data from {sock.getpeername()}: `{e}`. Will disconnect.")
-            self.socket_receiver_queue_remove_client_command(sock)
+            print(f"Harbor @ receiver thread: error handling data from {sock.getpeername()}: `{e}`.")
             return False
 
     def socket_receiver_queue_add_client_command(self, sock):
@@ -48,6 +47,10 @@ class Harbor:
 
     def socket_receiver_queue_remove_client_command(self, sock):
         self.__socket_receiver_daemon_inbox.put(("-", sock))
+        self.__socket_receiver_daemon_signal_w.send(b"\x01")
+
+    def socket_receiver_queue_clear_clients_command(self):
+        self.__socket_receiver_daemon_inbox.put("x")
         self.__socket_receiver_daemon_signal_w.send(b"\x01")
 
     def __socket_receiver_daemon(self):
@@ -60,12 +63,15 @@ class Harbor:
                 if selected_sock is self.__socket_receiver_daemon_signal_r:
                     self.__socket_receiver_daemon_signal_r.recv(1)
                     while not self.__socket_receiver_daemon_inbox.empty():
-                        command, command_sock = self.__socket_receiver_daemon_inbox.get()
+                        command = self.__socket_receiver_daemon_inbox.get()
+                        command_type = command[0]
                         with self.__connections_lock:
-                            if command == "+":
+                            if command_type == "+":
+                                command_sock = command[1]
                                 self.__connections[command_sock] = command_sock.getpeername()
                                 self.__main_thread_inbox.put(("harbor_connection_added", command_sock))
-                            elif command == "-":
+                            elif command_type == "-":
+                                command_sock = command[1]
                                 if command_sock in self.__connections:
                                     peer_name = command_sock.getpeername()
                                     del self.__connections[command_sock]
@@ -73,11 +79,20 @@ class Harbor:
                                         command_sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                        return False
                                     self.__main_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name))
+                            elif command_type == "x":
+                                for sock in list(self.__connections.keys()):
+                                    peer_name = sock.getpeername()
+                                    try:
+                                        sock.close()
+                                    except Exception as e:
+                                        print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
+                                    self.__main_thread_inbox.put(("harbor_connection_removed", sock, peer_name))
+                                self.__connections.clear()
                     break
                 else:
-                    self.__handle_incoming_data(selected_sock)
+                    if not self.__handle_incoming_data(selected_sock):
+                        self.socket_receiver_queue_remove_client_command(selected_sock)
 
     def __socket_acceptor_daemon(self):
         self.__server_socket.setblocking(False)
@@ -102,6 +117,7 @@ class Harbor:
         self.__sock_accp_thread.start()
 
     def stop(self):
+        self.socket_receiver_queue_clear_clients_command()
         self.__daemons_stop_event.set()
         self.__socket_receiver_daemon_signal_w.send(b'\x01')
         self.__sock_recv_thread.join()

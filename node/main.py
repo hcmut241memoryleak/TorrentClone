@@ -39,26 +39,31 @@ def main():
     print(f"Main thread: connected to tracker {TRACKER_HOST}:{TRACKER_PORT}. Adding to Harbor.")
     harbor.socket_receiver_queue_add_client_command(tracker_sock)
 
-    try:
-        while True:
-            try:
-                message = main_thread_inbox.get(timeout=0.1)
-                message_type = message[0]
-                if message_type == "harbor_connection_added":
-                    _, sock = message
-                    print(f"Main thread: connected to {sock.getpeername()}.")
+    while True:
+        try:
+            message = main_thread_inbox.get(timeout=0.1)
+            message_type = message[0]
+            if message_type == "harbor_connection_added":
+                _, sock = message
+                print(f"Main thread: connected to {sock.getpeername()}.")
 
-                    if sock == tracker_sock:
-                        executor.submit(send_message, harbor, sock, "Hello to tracker")
-                elif message_type == "harbor_connection_removed":
-                    _, sock, peer_name = message
-                    print(f"Main thread: connection to {peer_name} removed.")
-            except queue.Empty:
-                continue
-    except KeyboardInterrupt:
-        print("Shutting down server...")
-        harbor.stop()
-        print("Server shut down successfully.")
+                if sock == tracker_sock:
+                    executor.submit(send_message, harbor, sock, "From peer: hello tracker!")
+            elif message_type == "harbor_connection_removed":
+                _, sock, peer_name = message
+                print(f"Main thread: disconnected from {peer_name}.")
+            elif message_type == "harbor_message":
+                _, sock, msg = message
+                print(f"Main thread: message from {sock.getpeername()}: `{msg}`")
+        except queue.Empty:
+            continue
+        except KeyboardInterrupt:
+            break
+
+    print("Shutting down...")
+    harbor.stop()
+    executor.shutdown()
+    print("Shut down successfully.")
 
 if __name__ == "__main__":
     main()

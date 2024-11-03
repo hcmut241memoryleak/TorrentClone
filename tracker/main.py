@@ -32,27 +32,30 @@ def main():
     harbor = Harbor(server_socket, main_thread_inbox)
     harbor.start()
 
-    try:
-        while True:
-            try:
-                message = main_thread_inbox.get(timeout=0.1)
-                message_type = message[0]
-                if message_type == "harbor_connection_added":
-                    _, sock = message
-                    print(f"Main thread: connected to {sock.getpeername()}.")
 
-                    executor.submit(send_message, sock, "Hello from server")
-                elif message_type == "harbor_connection_removed":
-                    _, sock, peer_name = message
-                    print(f"Main thread: connection to {peer_name} removed.")
-                elif message_type == "harbor_message":
-                    _, sock, msg = message
-                    print(f"Main thread: message from {sock.getpeername()}: `{msg}`")
-            except queue.Empty:
-                continue
-    except KeyboardInterrupt:
-        print("Shutting down...")
-        harbor.stop()
+    while True:
+        try:
+            message = main_thread_inbox.get(timeout=0.1)
+            message_type = message[0]
+            if message_type == "harbor_connection_added":
+                _, sock = message
+                print(f"Main thread: connected to {sock.getpeername()}.")
+                executor.submit(send_message, harbor, sock, "From tracker: hello peer!")
+            elif message_type == "harbor_connection_removed":
+                _, sock, peer_name = message
+                print(f"Main thread: disconnected from {peer_name}.")
+            elif message_type == "harbor_message":
+                _, sock, msg = message
+                print(f"Main thread: message from {sock.getpeername()}: `{msg}`")
+        except queue.Empty:
+            continue
+        except KeyboardInterrupt:
+            break
+
+    print("Shutting down...")
+    harbor.stop()
+    executor.shutdown()
+    print("Shut down successfully.")
 
 if __name__ == "__main__":
     main()
