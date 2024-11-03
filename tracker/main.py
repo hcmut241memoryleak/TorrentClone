@@ -58,7 +58,7 @@ def main():
                     if msg_command_type == "peer_info":
                         _, json_info = msg
                         if sock in peers:
-                            info = PeerInfo.from_json(json_info)
+                            info = PeerInfo.from_dict(json.loads(json_info))
                             peers[sock].peer_id = info
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
                     else:

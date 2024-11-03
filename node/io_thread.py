@@ -9,9 +9,9 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
 from hashing import base62_sha1_hash_of
-from node.torrenting import LiveTorrent
+from node.torrenting import PersistentTorrentState, EphemeralTorrentState
 from peer_info import generate_unique_id, PeerInfo
-from torrent_data import TorrentFile, pack_files_to_pieces, Piece, Torrent
+from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
 TARGET_TRACKER_HOST = '127.0.0.1'
 TARGET_TRACKER_PORT = 65432
@@ -46,16 +46,16 @@ def initiate_piece_hashes(base_path: str, files: list[TorrentFile], pieces: list
             data += b"\x00" * (piece_size - len(data))
         piece.base_62_sha1 = base62_sha1_hash_of(data)
 
-def create_live_torrent_from_path(raw_path: str, piece_size: int):
+def create_persistent_torrent_state_from_path(raw_path: str, piece_size: int):
     base_path, files = files_from_path(raw_path)
     torrent_files = list(map(lambda file: TorrentFile(file, os.path.getsize(os.path.join(base_path, file))), files))
     pieces = pack_files_to_pieces(torrent_files, piece_size)
     initiate_piece_hashes(base_path, torrent_files, pieces, piece_size)
 
-    torrent = Torrent(torrent_files, pieces)
-    live_torrent = LiveTorrent.from_torrent(base_path, torrent)
+    torrent = TorrentStructure(torrent_files, pieces)
+    torrent_json, persistent_state = PersistentTorrentState.incomplete_from_torrent(base_path, torrent)
 
-    return live_torrent
+    return torrent_json, persistent_state
 
 def send_message(ui_thread_inbox: pyqtSignal, harbor: Harbor, sock: socket, message):
     try:
@@ -86,6 +86,7 @@ class IoThread(QThread):
         executor = ThreadPoolExecutor(max_workers=5)
 
         peers: dict[socket.socket, PeerInfo] = {}
+        torrent_states: dict[str, EphemeralTorrentState] = {}
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind((PEER_HOST, PEER_PORT))
@@ -112,7 +113,8 @@ class IoThread(QThread):
                     _, sock, peer_name = message
                     if sock == tracker_sock:
                         print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending info.")
-                        executor.submit(send_message, self.ui_thread_inbox_ready, harbor, sock, ("peer_info", my_peer_info.to_json()))
+                        outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
+                        executor.submit(send_message, self.ui_thread_inbox_ready, harbor, sock, outgoing_msg)
                     else:
                         print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
                 elif message_type == "harbor_connection_removed":
@@ -141,7 +143,8 @@ class IoThread(QThread):
                 elif message_type == "ui_create_torrent":
                     _, path, piece_size = message
                     if os.path.exists(path):
-                        print(create_live_torrent_from_path(path, piece_size).torrent_json)
+                        torrent_json, persistent_state = create_persistent_torrent_state_from_path(path, piece_size)
+                        torrent_states[persistent_state.torrent_hash] = EphemeralTorrentState(torrent_json, persistent_state)
 
                 elif message == "ui_quit":
                     stop_requested = True

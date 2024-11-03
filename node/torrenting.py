@@ -1,48 +1,55 @@
 import json
 
 from hashing import base62_sha1_hash_of
-from torrent_data import Torrent, TorrentFile
+from torrent_data import TorrentStructure, TorrentFile
 
-class LiveTorrent:
-    torrent_json: str
+class PersistentTorrentState:
     torrent_hash: str
-    torrent_data: Torrent
+    torrent_structure: TorrentStructure
     base_path: str
+    piece_progress: list[bool]
 
-    def __init__(self, torrent_json: str, torrent_hash: str, torrent_data: Torrent, base_path: str):
-        self.torrent_json = torrent_json
+    def __init__(self, torrent_hash: str, torrent_structure: TorrentStructure, base_path: str, piece_progress: list[bool]):
         self.torrent_hash = torrent_hash
-        self.torrent_data = torrent_data
+        self.torrent_structure = torrent_structure
         self.base_path = base_path
+        self.piece_progress = piece_progress
 
     def __repr__(self):
-        return f"LiveTorrent(torrent_hash={self.torrent_hash}, torrent_data={self.torrent_data}, base_path={self.base_path})"
+        return f"LiveTorrent(torrent_hash={self.torrent_hash}, torrent_structure={self.torrent_structure}, base_path={self.base_path}, piece_progress={self.piece_progress})"
 
     @classmethod
-    def from_torrent(cls, base_path: str, torrent: Torrent):
-        torrent_json = torrent.to_json()
+    def incomplete_from_torrent(cls, base_path: str, torrent: TorrentStructure):
+        torrent_json = json.dumps(torrent.to_dict())
         torrent_hash = base62_sha1_hash_of(torrent_json.encode("utf-8"))
-        live_torrent = cls(torrent_json, torrent_hash, torrent, base_path)
-        return live_torrent
+        piece_progress = [False] * len(torrent.pieces)
+        live_torrent = cls(torrent_hash, torrent, base_path, piece_progress)
+        return torrent_json, live_torrent
 
-    def to_json(self, include_torrent_json: bool = True):
+    def to_dict(self):
         data = {
             'torrent_hash': self.torrent_hash,
-            'torrent_data': self.torrent_data.to_json(),  # Assuming Torrent has a to_json method
-            'base_path': self.base_path
+            'torrent_structure': self.torrent_structure.to_dict(),  # Convert Torrent to dict
+            'base_path': self.base_path,
+            'piece_progress': self.piece_progress
         }
-        if include_torrent_json:
-            data['torrent_json'] = self.torrent_json
 
-        return json.dumps(data)
+        return data
 
     @classmethod
-    def from_json(cls, json_str: str):
-        data = json.loads(json_str)
-        torrent_data = Torrent.from_json(data['torrent_data'])  # Assuming Torrent has a from_json method
+    def from_dict(cls, data: dict):
+        torrent_structure = TorrentStructure.from_dict(data['torrent_structure'])  # Create Torrent from dict
         return cls(
-            torrent_json=data.get('torrent_json', ''),
             torrent_hash=data['torrent_hash'],
-            torrent_data=torrent_data,
-            base_path=data['base_path']
+            torrent_structure=torrent_structure,
+            base_path=data['base_path'],
+            piece_progress=data['piece_progress']
         )
+
+class EphemeralTorrentState:
+    persistent_state: PersistentTorrentState
+    torrent_json: str
+
+    def __init__(self, s: PersistentTorrentState, torrent_json: str):
+        self.persistent_state = s
+        self.torrent_json = torrent_json

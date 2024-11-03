@@ -25,15 +25,14 @@ class PeerInfo:
     def is_filled(self):
         return self.peer_id is not None and self.peer_port is not None
 
-    def to_json(self):
-        return json.dumps({
+    def to_dict(self):
+        return {
             'peer_id': self.peer_id,
             'peer_port': self.peer_port
-        })
+        }
 
     @classmethod
-    def from_json(cls, json_str):
-        data = json.loads(json_str)
+    def from_dict(cls, data: dict):
         instance = cls()
         instance.peer_id = data.get('peer_id')
         instance.peer_port = data.get('peer_port')
