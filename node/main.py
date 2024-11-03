@@ -136,7 +136,8 @@ class MainWindow(QWidget):
 
         self.setLayout(layout)
         self.setWindowTitle("HK241/MemoryLeak: TorrentClone (Qt UI)")
-        self.setFixedSize(1280, 720)
+        self.resize(1280, 720)
+        self.setMinimumSize(600, 400)
 
     def open_torrent_creation_dialog(self):
         TorrentCreationDialog().exec()
