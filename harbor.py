@@ -26,11 +26,12 @@ class Harbor:
         self.__socket_receiver_daemon_inbox = queue.Queue()
         self.__socket_receiver_daemon_signal_r, self.__socket_receiver_daemon_signal_w = socket.socketpair()
         self.__daemons_stop_event = threading.Event()
-        
+
         self.__sock_recv_thread = None
         self.__sock_accp_thread = None
 
     def __handle_incoming_data(self, sock):
+        peer_name = sock.getpeername()
         try:
             raw_msg_len = sock.recv(4)
             if not raw_msg_len:
@@ -45,7 +46,7 @@ class Harbor:
                 data += packet
 
             json_data = json.loads(data.decode("utf-8"))
-            self.__main_thread_inbox.put(("harbor_message", sock, json_data))
+            self.__main_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
             return True
 
         except Exception as e:
@@ -60,7 +61,7 @@ class Harbor:
         self.__socket_receiver_daemon_inbox.put(("-", sock))
         self.__socket_receiver_daemon_signal_w.send(b"\x01")
 
-    def socket_receiver_queue_clear_clients_command(self):
+    def socket_receiver_queue_stop_command(self):
         self.__socket_receiver_daemon_inbox.put("x")
         self.__socket_receiver_daemon_signal_w.send(b"\x01")
 
@@ -91,7 +92,7 @@ class Harbor:
                                         command_sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                    self.__main_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name))
+                                    self.__main_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name, False))
                             elif command_type == "x":
                                 for sock in self.__connections:
                                     peer_name = sock.getpeername()
@@ -99,8 +100,9 @@ class Harbor:
                                         sock.close()
                                     except Exception as e:
                                         print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                    self.__main_thread_inbox.put(("harbor_connection_removed", sock, peer_name))
+                                    self.__main_thread_inbox.put(("harbor_connection_removed", sock, peer_name, True))
                                 self.__connections.clear()
+                                self.__main_thread_inbox.put("harbor_stopped")
                     break
                 else:
                     if not self.__handle_incoming_data(selected_sock):
@@ -129,7 +131,9 @@ class Harbor:
         self.__sock_accp_thread.start()
 
     def stop(self):
-        self.socket_receiver_queue_clear_clients_command()
+        self.socket_receiver_queue_stop_command()
+
+    def join(self):
         self.__daemons_stop_event.set()
         self.__socket_receiver_daemon_signal_w.send(b'\x01')
         self.__sock_recv_thread.join()

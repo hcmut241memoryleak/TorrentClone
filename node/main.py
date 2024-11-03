@@ -5,6 +5,7 @@ import struct
 import queue
 
 from harbor import Harbor
+from peer_data import generate_unique_id, PeerData
 
 TRACKER_HOST = '127.0.0.1'
 TRACKER_PORT = 65432
@@ -23,7 +24,12 @@ def send_message(harbor: Harbor, sock: socket, message):
         harbor.socket_receiver_queue_remove_client_command(sock)
 
 def main():
+    my_peer_id = generate_unique_id()
+    print(f"Main thread: ID is {my_peer_id}")
+
     executor = ThreadPoolExecutor(max_workers=5)
+
+    peers: dict[socket.socket, PeerData] = {}
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((PEER_HOST, PEER_PORT))
@@ -38,31 +44,47 @@ def main():
     print(f"Main thread: connected to tracker {TRACKER_HOST}:{TRACKER_PORT}. Adding to Harbor.")
     harbor.socket_receiver_queue_add_client_command(tracker_sock)
 
-    while True:
+    stop_requested = False
+    keep_running = True
+    while keep_running:
         try:
             message = main_thread_inbox.get(timeout=0.1)
             message_type = message[0]
             if message_type == "harbor_connection_added":
                 _, sock, peer_name = message
-                print(f"Main thread: connected to {peer_name}.")
-
                 if sock == tracker_sock:
-                    executor.submit(send_message, harbor, sock, "From peer: hello tracker!")
+                    print(f"Main thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending ID.")
+                    executor.submit(send_message, harbor, sock, ("peer_id", my_peer_id))
+                else:
+                    print(f"Main thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
             elif message_type == "harbor_connection_removed":
-                _, sock, peer_name = message
-                print(f"Main thread: disconnected from {peer_name}.")
+                _, sock, peer_name, caused_by_stop = message
+                if sock == tracker_sock:
+                    print(f"Main thread: disconnected from tracker {peer_name[0]}:{peer_name[1]}! Stopping.")
+                    if not caused_by_stop:
+                        stop_requested = True
             elif message_type == "harbor_message":
-                _, sock, msg = message
-                print(f"Main thread: message from {sock.getpeername()}: `{msg}`")
+                _, sock, peer_name, msg = message
+                if sock == tracker_sock:
+                    print(f"Main thread: message from tracker {peer_name[0]}:{peer_name[1]}: {msg}")
+                else:
+                    print(f"Main thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
+            elif message == "harbor_stopped":
+                print(f"Main thread: Harbor stopped.")
+                keep_running = False
         except queue.Empty:
             continue
         except KeyboardInterrupt:
-            break
+            stop_requested = True
 
-    print("Shutting down...")
-    harbor.stop()
+        if stop_requested:
+            stop_requested = False
+            print("Main thread: stopping Harbor...")
+            harbor.stop()
+
+    harbor.join()
     executor.shutdown()
-    print("Shut down successfully.")
+    print("Main thread: bye")
 
 if __name__ == "__main__":
     main()
