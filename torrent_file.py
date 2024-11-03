@@ -1,18 +1,13 @@
 class TorrentFile:
     path: str
     byte_count: int
-    byte_start: int
 
     def __init__(self, path, byte_count):
         self.path = path
         self.byte_count = byte_count
-        self.byte_start = 0
-
-    def set_byte_start(self, start):
-        self.byte_start = start
 
     def __repr__(self):
-        return f"File(path={self.path}, byte_count={self.byte_count}, byte_start={self.byte_start})"
+        return f"File(path={self.path}, byte_count={self.byte_count})"
 
 class PieceSection:
     length: int
@@ -44,10 +39,7 @@ def pack_files_to_pieces(files: list[TorrentFile], piece_size):
     current_piece = Piece()
     current_piece_position = 0
 
-    current_start = 0
     for file_index, file in enumerate(files):
-        file.set_byte_start(current_start)
-
         current_file_position = 0
         while current_file_position < file.byte_count:
             if (file.byte_count - current_file_position) >= (piece_size - current_piece_position): # need a new piece
@@ -60,8 +52,6 @@ def pack_files_to_pieces(files: list[TorrentFile], piece_size):
                 current_piece.add_section(PieceSection(file.byte_count - current_file_position, file_index, current_file_position, current_piece_position))
                 current_piece_position += file.byte_count - current_file_position
                 current_file_position = file.byte_count
-
-        current_start += file.byte_count
 
     if len(current_piece.sections) > 0:
         pieces.append(current_piece)
