@@ -49,6 +49,7 @@ class PersistentTorrentState:
 class EphemeralTorrentState:
     persistent_state: PersistentTorrentState
     torrent_json: str
+    last_announced: None
 
     def __init__(self, s: PersistentTorrentState, torrent_json: str):
         self.persistent_state = s
