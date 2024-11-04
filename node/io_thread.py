@@ -52,7 +52,7 @@ def create_persistent_torrent_state_from_path(raw_path: str, piece_size: int):
     pieces = pack_files_to_pieces(torrent_files, piece_size)
     initiate_piece_hashes(base_path, torrent_files, pieces, piece_size)
 
-    torrent = TorrentStructure(torrent_files, pieces)
+    torrent = TorrentStructure(torrent_files, piece_size, pieces)
     torrent_json, persistent_state = PersistentTorrentState.incomplete_from_torrent(base_path, torrent)
 
     return torrent_json, persistent_state

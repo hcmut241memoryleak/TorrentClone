@@ -81,28 +81,32 @@ class Piece:
 
 class TorrentStructure:
     files: list[TorrentFile]
+    piece_size: int
     pieces: list[Piece]
 
-    def __init__(self, f: list[TorrentFile], p: list[Piece]):
+    def __init__(self, f: list[TorrentFile], s: int, p: list[Piece]):
         self.files = f
+        self.piece_size = s
         self.pieces = p
 
     def __repr__(self):
-        return f"Torrent(files={self.files}, pieces={self.pieces})"
+        return f"Torrent(files={self.files}, piece_size={self.piece_size}, pieces={self.pieces})"
 
     def to_dict(self):
         files_dict = [file.to_dict() for file in self.files]
         pieces_dict = [piece.to_dict() for piece in self.pieces]
         return {
             'files': files_dict,
+            'piece_size': self.piece_size,
             'pieces': pieces_dict
         }
 
     @classmethod
     def from_dict(cls, data: dict):
         files = [TorrentFile.from_dict(file_data) for file_data in data['files']]
+        piece_size = data['piece_size']
         pieces = [Piece.from_dict(piece_data) for piece_data in data['pieces']]
-        return cls(files, pieces)
+        return cls(files, piece_size, pieces)
 
 def pack_files_to_pieces(files: list[TorrentFile], piece_size):
     pieces = []
