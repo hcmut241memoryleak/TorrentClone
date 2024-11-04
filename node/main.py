@@ -2,11 +2,12 @@ import os.path
 import queue
 import sys
 
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox, QListWidget, QListWidgetItem
 
 from node.io_thread import IoThread
-from node.torrenting import EphemeralTorrentState
+from node.torrenting import EphemeralTorrentState, PieceState
 
 io_thread_inbox = queue.Queue()
 
@@ -127,6 +128,30 @@ class TorrentCreationDialog(QDialog):
             self.close()
 
 
+class TorrentListItemWidget(QWidget):
+    def __init__(self, torrent_name: str, piece_state: str):
+        super().__init__()
+
+        layout = QVBoxLayout()
+
+        # Torrent name label (larger font)
+        self.name_label = QLabel(torrent_name)
+        name_font = QFont()
+        name_font.setPointSize(12)  # Set a larger font size for the name
+        name_font.setBold(True)
+        self.name_label.setFont(name_font)
+        layout.addWidget(self.name_label)
+
+        # Piece state label (smaller font)
+        self.state_label = QLabel(piece_state)
+        state_font = QFont()
+        state_font.setPointSize(10)
+        self.state_label.setFont(state_font)
+        layout.addWidget(self.state_label)
+
+        self.setLayout(layout)
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -184,12 +209,36 @@ class MainWindow(QWidget):
             _, torrents = message
             self.update_torrent_list(torrents)
 
+    def format_piece_states(self, piece_states: list[PieceState]) -> str:
+        total_pieces = len(piece_states)
+        completed_pieces = piece_states.count(PieceState.COMPLETE)
+
+        if completed_pieces == total_pieces:
+            return "Complete"
+
+        pending_download = piece_states.count(PieceState.PENDING_DOWNLOAD)
+        pending_check = piece_states.count(PieceState.PENDING_CHECK)
+
+        completion_percentage = (completed_pieces / total_pieces) * 100
+
+        status_parts = [f"{completion_percentage:.1f}%"]
+        if pending_download > 0:
+            status_parts.append(f"{pending_download} pieces pending download")
+        if pending_check > 0:
+            status_parts.append(f"{pending_check} pieces pending recheck")
+
+        return " (" + ", ".join(status_parts) + ")"
+
     def update_torrent_list(self, torrent_states: dict[str, EphemeralTorrentState]):
         self.torrent_list.clear()
-        for torrent_name, torrent in torrent_states.items():
-            item_text = f"{torrent_name} - {torrent.persistent_state.piece_states[0].value}"
-            list_item = QListWidgetItem(item_text)
+        for torrent_hash, ephemeral_torrent_state in torrent_states.items():
+            piece_state = self.format_piece_states(ephemeral_torrent_state.persistent_state.piece_states)
+            item_widget = TorrentListItemWidget(ephemeral_torrent_state.persistent_state.torrent_name, piece_state)
+
+            list_item = QListWidgetItem(self.torrent_list)
+            list_item.setSizeHint(item_widget.sizeHint())
             self.torrent_list.addItem(list_item)
+            self.torrent_list.setItemWidget(list_item, item_widget)
 
     def closeEvent(self, event):
         io_thread_inbox.put("ui_quit")
@@ -198,15 +247,6 @@ class MainWindow(QWidget):
 
 
 def main():
-    # files = [
-    #     TorrentFile("hi.txt", 1572000),
-    #     TorrentFile("bye.txt", 200),
-    #     TorrentFile("lol.txt", 864000),
-    # ]
-    #
-    # for piece in pack_files_to_pieces(files, 2 ** 19):
-    #     print(f"{piece}")
-
     app = QApplication(sys.argv)
     main_window = MainWindow()
     main_window.show()
