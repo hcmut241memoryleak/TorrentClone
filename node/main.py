@@ -3,9 +3,10 @@ import queue
 import sys
 
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
-    QLineEdit, QComboBox
+    QLineEdit, QComboBox, QListWidget, QListWidgetItem
 
 from node.io_thread import IoThread
+from node.torrenting import EphemeralTorrentState
 
 io_thread_inbox = queue.Queue()
 
@@ -155,6 +156,10 @@ class MainWindow(QWidget):
         layout.addLayout(magnet_link_layout)
         layout.addWidget(self.label)
 
+        # Add the torrent list widget
+        self.torrent_list = QListWidget()
+        layout.addWidget(self.torrent_list)
+
         self.setLayout(layout)
         self.setWindowTitle("HK241/MemoryLeak: TorrentClone (Qt UI)")
         self.resize(1280, 720)
@@ -173,6 +178,18 @@ class MainWindow(QWidget):
             IoErrorDialog(error_string).exec()
         elif message == "io_hi":
             self.label.setText(f"I/O thread has connected to the central tracker and says hi.")
+        elif message_type == "io_peers_changed":
+            pass
+        elif message_type == "io_torrents_changed":
+            _, torrents = message
+            self.update_torrent_list(torrents)
+
+    def update_torrent_list(self, torrent_states: dict[str, EphemeralTorrentState]):
+        self.torrent_list.clear()
+        for torrent_name, torrent in torrent_states.items():
+            item_text = f"{torrent_name} - {torrent.persistent_state.piece_states[0].value}"
+            list_item = QListWidgetItem(item_text)
+            self.torrent_list.addItem(list_item)
 
     def closeEvent(self, event):
         io_thread_inbox.put("ui_quit")

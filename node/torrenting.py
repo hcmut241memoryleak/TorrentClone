@@ -74,7 +74,9 @@ class EphemeralTorrentState:
 
 
 class EphemeralPeerState:
+    peer_name: (str, int)
     peer_info: PeerInfo
 
-    def __init__(self):
+    def __init__(self, peer_name: (str, int)):
+        self.peer_name = peer_name
         self.peer_info = PeerInfo()

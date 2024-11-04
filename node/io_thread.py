@@ -75,9 +75,20 @@ class IoThread(QThread):
     ui_thread_inbox = pyqtSignal(object)
     io_thread_inbox: queue.Queue
 
+    peers: dict[socket.socket, EphemeralPeerState]
+    torrent_states: dict[str, EphemeralTorrentState]
+
     def __init__(self, io_thread_inbox: queue.Queue):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
+        self.peers = {}
+        self.torrent_states = {}
+
+    def ui_update_peers_view(self):
+        self.ui_thread_inbox.emit(("io_peers_changed", self.peers))
+
+    def ui_update_torrents_view(self):
+        self.ui_thread_inbox.emit(("io_torrents_changed", self.torrent_states))
 
     def run(self):
         my_peer_id = generate_unique_id()
@@ -88,9 +99,6 @@ class IoThread(QThread):
         my_peer_info.peer_port = PEER_PORT
 
         executor = ThreadPoolExecutor(max_workers=5)
-
-        peers: dict[socket.socket, EphemeralPeerState] = {}
-        torrent_states: dict[str, EphemeralTorrentState] = {}
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind((PEER_HOST, PEER_PORT))
@@ -124,10 +132,12 @@ class IoThread(QThread):
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
                     if sock != tracker_sock:
-                        peers[sock] = EphemeralPeerState()
+                        self.peers[sock] = EphemeralPeerState(peer_name)
                         print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected. Sending info.")
                         outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
                         executor.submit(send_message, self.ui_thread_inbox, harbor, sock, outgoing_msg)
+
+                        self.ui_update_peers_view()
 
                 elif message_type == "harbor_connection_removed":
                     _, sock, peer_name, caused_by_stop = message
@@ -137,6 +147,9 @@ class IoThread(QThread):
                         else:
                             print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} disconnected! Stopping.")
                             stop_requested = True
+                    else:
+                        del self.peers[sock]
+                        self.ui_update_peers_view()
 
                 elif message_type == "harbor_message":
                     _, sock, peer_name, msg = message
@@ -150,10 +163,11 @@ class IoThread(QThread):
                     else:
                         if msg_command_type == "peer_info":
                             _, json_info = msg
-                            if sock in peers:
+                            if sock in self.peers:
                                 info = PeerInfo.from_dict(json.loads(json_info))
-                                peers[sock].peer_info = info
+                                self.peers[sock].peer_info = info
                                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
+                                self.ui_update_peers_view()
                         else:
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
 
@@ -162,10 +176,15 @@ class IoThread(QThread):
 
                 elif message_type == "ui_create_torrent":
                     _, path, torrent_name, piece_size = message
+                    print(f"I/O thread: got request to create torrent: {path}, {torrent_name}, {piece_size}")
                     if os.path.exists(path):
                         ephemeral_state = create_ephemeral_torrent_state_from_path(path, torrent_name, piece_size)
-                        torrent_states[ephemeral_state.persistent_state.torrent_hash] = ephemeral_state
-                        print(ephemeral_state.torrent_json)
+                        print(f"I/O thread: created torrent: {ephemeral_state.persistent_state.torrent_hash}, {len(ephemeral_state.persistent_state.torrent_structure.pieces)} pieces")
+                        self.torrent_states[ephemeral_state.persistent_state.torrent_hash] = ephemeral_state
+                        self.ui_update_torrents_view()
+                    else:
+                        print(f"I/O thread: torrent creation: path does not exist")
+
 
                 elif message == "ui_quit":
                     stop_requested = True
@@ -174,9 +193,9 @@ class IoThread(QThread):
                     print(f"I/O thread: I/O message: {message}")
             except queue.Empty:
                 # TODO: torrent announce
-                for peer_socket, peer_info in peers.items():
-                    executor.submit(send_message, self.ui_thread_inbox, harbor, peer_socket,
-                                    ("greet", "From peer: have a great day!"))
+                # for peer_socket, peer_info in self.peers.items():
+                #     executor.submit(send_message, self.ui_thread_inbox, harbor, peer_socket,
+                #                     ("greet", "From peer: have a great day!"))
 
                 continue
             if stop_requested:
