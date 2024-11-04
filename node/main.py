@@ -6,6 +6,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox, QListWidget, QListWidgetItem
 
+from hashing import win_filesys_escape_uppercase, win_filesys_unescape_uppercase, base62_sha256_hash_of
 from node.io_thread import IoThread
 from node.torrenting import EphemeralTorrentState, PieceState
 
@@ -223,15 +224,15 @@ class MainWindow(QWidget):
 
         status_parts = [f"{completion_percentage:.1f}%"]
         if pending_download > 0:
-            status_parts.append(f"{pending_download} pieces pending download")
+            status_parts.append(f"{pending_download}pcs pending download")
         if pending_check > 0:
-            status_parts.append(f"{pending_check} pieces pending recheck")
+            status_parts.append(f"{pending_check}pcs pending recheck")
 
         return " (" + ", ".join(status_parts) + ")"
 
     def update_torrent_list(self, torrent_states: dict[str, EphemeralTorrentState]):
         self.torrent_list.clear()
-        for torrent_hash, ephemeral_torrent_state in torrent_states.items():
+        for sha256_hash, ephemeral_torrent_state in torrent_states.items():
             piece_state = self.format_piece_states(ephemeral_torrent_state.persistent_state.piece_states)
             item_widget = TorrentListItemWidget(ephemeral_torrent_state.persistent_state.torrent_name, piece_state)
 

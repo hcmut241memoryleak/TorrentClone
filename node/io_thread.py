@@ -10,7 +10,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
 from hashing import base62_sha1_hash_of
-from node.torrenting import EphemeralTorrentState, EphemeralPeerState, PieceState, AnnouncementTorrentState
+from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PieceState, AnnouncementTorrentState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
@@ -20,9 +20,6 @@ TARGET_TRACKER_PORT = 65432
 PEER_HOST = '127.0.0.1'
 PEER_PORT = 65433
 
-
-# def file_path_to_torrent_file(path: str):
-#     TorrentFile(path, os.path.getsize(path))
 
 def files_from_path(base_path: str):
     if os.path.isfile(base_path):
@@ -65,7 +62,8 @@ class IoThread(QThread):
     ui_thread_inbox = pyqtSignal(object)
     io_thread_inbox: queue.Queue
 
-    peers: dict[socket.socket, EphemeralPeerState]
+    tracker_socket: socket.socket
+    peers: dict[socket.socket, NodeEphemeralPeerState]
     torrent_states: dict[str, EphemeralTorrentState]
 
     harbor: Harbor
@@ -119,14 +117,21 @@ class IoThread(QThread):
     def ui_update_torrents_view(self):
         self.ui_thread_inbox.emit(("io_torrents_changed", self.torrent_states))
 
-    def announce_torrents_to_peers(self):
-        announcement_message = ("peer_torrent_announcement", [
-            AnnouncementTorrentState(
-                torrent_hash=torrent_state.persistent_state.torrent_hash,
-                piece_states=torrent_state.persistent_state.piece_states
-            ) for torrent_state in self.torrent_states.values()
+    def announce_torrents_to_tracker(self):
+        tracker_announcement_message = ("peer_torrent_list", [
+            torrent_state.persistent_state.sha256_hash for torrent_state in self.torrent_states.values()
         ])
-        self.executor.submit(self.mass_send_message, list(self.peers.keys()), announcement_message)
+        self.executor.submit(self.send_message, self.tracker_socket, tracker_announcement_message)
+
+    def announce_torrents_to_peers(self):
+        if len(self.torrent_states) != 0:
+            node_announcement_message = ("peer_torrent_announcement", [
+                AnnouncementTorrentState(
+                    sha256_hash=torrent_state.persistent_state.sha256_hash,
+                    piece_states=torrent_state.persistent_state.piece_states
+                ).to_dict() for torrent_state in self.torrent_states.values()
+            ])
+            self.executor.submit(self.mass_send_message, list(self.peers.keys()), node_announcement_message)
 
     def run(self):
         my_peer_id = generate_unique_id()
@@ -146,21 +151,21 @@ class IoThread(QThread):
         self.harbor = Harbor(server_socket, self.io_thread_inbox)
         self.harbor.start()
 
-        tracker_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tracker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            tracker_sock.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
+            self.tracker_socket.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
         except ConnectionRefusedError as e:
             self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
             return
         print(
             f"I/O thread: tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
-        self.harbor.socket_receiver_queue_add_client_command(tracker_sock)
-        outgoing_msg = ("peer_info", my_peer_info.to_dict())
-        self.executor.submit(self.send_message, tracker_sock, outgoing_msg)
+        self.harbor.socket_receiver_queue_add_client_command(self.tracker_socket)
+        self.executor.submit(self.send_message, self.tracker_socket, ("peer_info", my_peer_info.to_dict()))
 
         self.ui_thread_inbox.emit("io_hi")
 
-        last_reannounced_torrents = time.time()
+        last_reannounced_torrents_to_tracker = time.time()
+        last_reannounced_torrents_to_peers = time.time()
 
         stop_requested = False
         keep_running = True
@@ -171,8 +176,8 @@ class IoThread(QThread):
 
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
-                    if sock != tracker_sock:
-                        self.peers[sock] = EphemeralPeerState(peer_name)
+                    if sock != self.tracker_socket:
+                        self.peers[sock] = NodeEphemeralPeerState(peer_name)
                         print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected. Sending info.")
                         outgoing_msg = ("peer_info", my_peer_info.to_dict())
                         self.executor.submit(self.send_message, sock, outgoing_msg)
@@ -181,7 +186,7 @@ class IoThread(QThread):
 
                 elif message_type == "harbor_connection_removed":
                     _, sock, peer_name, caused_by_stop = message
-                    if sock == tracker_sock:
+                    if sock == self.tracker_socket:
                         if caused_by_stop:
                             print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} disconnected.")
                         else:
@@ -195,7 +200,7 @@ class IoThread(QThread):
                 elif message_type == "harbor_message":
                     _, sock, peer_name, msg = message
                     msg_command_type = msg[0]
-                    if sock == tracker_sock:
+                    if sock == self.tracker_socket:
                         if msg_command_type == "motd":
                             _, motd = msg
                             print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
@@ -224,10 +229,10 @@ class IoThread(QThread):
 
                 elif message_type == "ui_create_torrent":
                     _, path, torrent_name, piece_size = message
-                    print(f"I/O thread: got request to create torrent: {path}, {torrent_name}, {piece_size}")
                     if os.path.exists(path):
                         ephemeral_state = create_ephemeral_torrent_state_from_path(path, torrent_name, piece_size)
-                        self.torrent_states[ephemeral_state.persistent_state.torrent_hash] = ephemeral_state
+                        self.torrent_states[ephemeral_state.persistent_state.sha256_hash] = ephemeral_state
+                        self.announce_torrents_to_tracker()
                         self.announce_torrents_to_peers()
                         self.ui_update_torrents_view()
                     else:
@@ -242,9 +247,14 @@ class IoThread(QThread):
                 pass
 
             current_time = time.time()
-            if current_time - last_reannounced_torrents >= 2: # reannounce every 2 seconds
-                last_reannounced_torrents = current_time
+            if current_time - last_reannounced_torrents_to_peers >= 2: # reannounce every 2 seconds
+                last_reannounced_torrents_to_peers = current_time
                 self.announce_torrents_to_peers()
+            # Reannouncements to tracker is currently disabled! I will only reannouce when torrents are added/removed.
+            # It is up to the peers to individually announce to each other about their torrent progresses (i.e. piece states).
+            # if current_time - last_reannounced_torrents_to_tracker >= 10: # reannounce every 10 seconds
+            #     last_reannounced_torrents_to_tracker = current_time
+            #     self.announce_torrents_to_tracker()
 
             if stop_requested:
                 stop_requested = False
