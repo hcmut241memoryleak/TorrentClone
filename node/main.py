@@ -1,12 +1,13 @@
+import queue
+import sys
+
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox
-
-import sys
-import queue
 
 from node.io_thread import IoThread
 
 io_thread_inbox = queue.Queue()
+
 
 class IoErrorDialog(QDialog):
     def __init__(self, e: str):
@@ -26,6 +27,7 @@ class IoErrorDialog(QDialog):
         self.setLayout(layout)
         self.setMinimumWidth(600)
         self.setWindowTitle("I/O thread error")
+
 
 class TorrentCreationDialog(QDialog):
     def __init__(self):
@@ -96,14 +98,15 @@ class TorrentCreationDialog(QDialog):
         path = self.path_input.text()
         if path != "":
             piece_sizes = [
-                2 ** 17, # 128 KiB
-                2 ** 18, # 256 KiB
-                2 ** 19, # 512 KiB
-                2 ** 20 # 1 MiB
+                2 ** 17,  # 128 KiB
+                2 ** 18,  # 256 KiB
+                2 ** 19,  # 512 KiB
+                2 ** 20  # 1 MiB
             ]
             piece_size = piece_sizes[self.piece_size_combobox.currentIndex()]
             io_thread_inbox.put(("ui_create_torrent", path, piece_size))
             self.close()
+
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -158,6 +161,7 @@ class MainWindow(QWidget):
         self.io_thread.wait()  # Wait for the I/O thread to finish
         event.accept()
 
+
 def main():
     # files = [
     #     TorrentFile("hi.txt", 1572000),
@@ -172,6 +176,7 @@ def main():
     main_window = MainWindow()
     main_window.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

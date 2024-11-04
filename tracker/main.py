@@ -1,8 +1,8 @@
-import socket
-from concurrent.futures import ThreadPoolExecutor
 import json
-import struct
 import queue
+import socket
+import struct
+from concurrent.futures import ThreadPoolExecutor
 
 from harbor import Harbor
 from peer_info import PeerInfo
@@ -12,6 +12,7 @@ TRACKER_PORT = 65432
 
 main_thread_inbox = queue.Queue()
 
+
 def send_message(harbor: Harbor, sock: socket, message):
     try:
         message_data = json.dumps(message).encode("utf-8")
@@ -20,6 +21,7 @@ def send_message(harbor: Harbor, sock: socket, message):
     except Exception as e:
         print(f"Error sending data to {sock.getpeername()}: {e}")
         harbor.socket_receiver_queue_remove_client_command(sock)
+
 
 def main():
     executor = ThreadPoolExecutor(max_workers=5)
@@ -77,6 +79,7 @@ def main():
             harbor.stop()
 
     executor.shutdown()
+
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,11 @@
-import socket
-import time
-import select
-import threading
 import json
-import struct
 import queue
+import socket
+import struct
+import threading
+
+import select
+
 
 class Harbor:
     __server_socket: socket.socket
@@ -94,15 +95,18 @@ class Harbor:
                                     try:
                                         command_sock.close()
                                     except Exception as e:
-                                        print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
-                                    self.__io_thread_inbox.put(("harbor_connection_removed", command_sock, peer_name, False))
+                                        print(
+                                            f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
+                                    self.__io_thread_inbox.put(
+                                        ("harbor_connection_removed", command_sock, peer_name, False))
                             elif command_type == "x":
                                 for sock in self.__connections:
                                     peer_name = sock.getpeername()
                                     try:
                                         sock.close()
                                     except Exception as e:
-                                        print(f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
+                                        print(
+                                            f"Harbor @ receiver thread: error closing connection to {peer_name}: `{e}`. Will disregard.")
                                     self.__io_thread_inbox.put(("harbor_connection_removed", sock, peer_name, True))
                                 self.__connections.clear()
                                 self.__io_thread_inbox.put("harbor_stopped")
