@@ -49,17 +49,15 @@ def initiate_piece_hashes(base_path: str, files: list[TorrentFile], pieces: list
         piece.base_62_sha1 = base62_sha1_hash_of(data)
 
 
-def create_persistent_torrent_state_from_path(raw_path: str, piece_size: int):
+def create_ephemeral_torrent_state_from_path(raw_path: str, torrent_name: str, piece_size: int):
     base_path, files = files_from_path(raw_path)
     torrent_files = list(map(lambda file: TorrentFile(file, os.path.getsize(os.path.join(base_path, file))), files))
+
     pieces = pack_files_to_pieces(torrent_files, piece_size)
     initiate_piece_hashes(base_path, torrent_files, pieces, piece_size)
 
     torrent_structure = TorrentStructure(torrent_files, piece_size, pieces)
-    torrent_json, persistent_state = EphemeralTorrentState.from_torrent_structure(torrent_structure, base_path,
-                                                                                  "torrent", PieceState.COMPLETE)
-
-    return torrent_json, persistent_state
+    return EphemeralTorrentState.from_torrent_structure(torrent_structure, base_path, torrent_name, PieceState.COMPLETE)
 
 
 def send_message(ui_thread_inbox: pyqtSignal, harbor: Harbor, sock: socket, message):
@@ -163,12 +161,11 @@ class IoThread(QThread):
                     keep_running = False
 
                 elif message_type == "ui_create_torrent":
-                    _, path, piece_size = message
+                    _, path, torrent_name, piece_size = message
                     if os.path.exists(path):
-                        torrent_json, persistent_state = create_persistent_torrent_state_from_path(path, piece_size)
-                        torrent_states[persistent_state.torrent_hash] = EphemeralTorrentState(torrent_json,
-                                                                                              persistent_state)
-                        print(torrent_json)
+                        ephemeral_state = create_ephemeral_torrent_state_from_path(path, torrent_name, piece_size)
+                        torrent_states[ephemeral_state.persistent_state.torrent_hash] = ephemeral_state
+                        print(ephemeral_state.torrent_json)
 
                 elif message == "ui_quit":
                     stop_requested = True

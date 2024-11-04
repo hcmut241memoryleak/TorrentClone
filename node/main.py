@@ -1,3 +1,4 @@
+import os.path
 import queue
 import sys
 
@@ -37,12 +38,26 @@ class TorrentCreationDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout()
 
+        # "Name" | Name
+        torrent_naming_layout = QHBoxLayout()
+        self.torrent_naming_label = QLabel("Name")
+        torrent_naming_layout.addWidget(self.torrent_naming_label)
+
+        self.torrent_naming_input = QLineEdit()
+        self.torrent_naming_input.setPlaceholderText("Name (uses file/folder name if left empty)")
+        torrent_naming_layout.addWidget(self.torrent_naming_input)
+
+        layout.addLayout(torrent_naming_layout)
+
         # Path | Select file | Select folder
 
         path_selection_layout = QHBoxLayout()
 
+        self.path_label = QLabel("Path")
+        path_selection_layout.addWidget(self.path_label)
+
         self.path_input = QLineEdit()
-        self.path_input.setPlaceholderText("Path...")
+        self.path_input.setPlaceholderText("Path to file or folder")
         path_selection_layout.addWidget(self.path_input)
 
         self.file_button = QPushButton("Select file")
@@ -55,7 +70,7 @@ class TorrentCreationDialog(QDialog):
 
         layout.addLayout(path_selection_layout)
 
-        # Piece size: [combo box] | Create
+        # "Piece size:" | [combo box] | Create
 
         create_layout = QHBoxLayout()
 
@@ -104,7 +119,10 @@ class TorrentCreationDialog(QDialog):
                 2 ** 20  # 1 MiB
             ]
             piece_size = piece_sizes[self.piece_size_combobox.currentIndex()]
-            io_thread_inbox.put(("ui_create_torrent", path, piece_size))
+            torrent_name = self.torrent_naming_input.text()
+            if len(torrent_name) == 0:
+                torrent_name = os.path.basename(path)
+            io_thread_inbox.put(("ui_create_torrent", path, torrent_name, piece_size))
             self.close()
 
 
