@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
-from hashing import base62_sha1_hash_of
+from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_filesys_unescape_uppercase
 from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PieceState, AnnouncementTorrentState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
@@ -68,6 +68,17 @@ class IoThread(QThread):
 
     harbor: Harbor
     executor: ThreadPoolExecutor
+
+    def save_state_to_disk(self):
+        if not os.path.exists("appdata"):
+            os.mkdir("appdata")
+        for hash, ephemeral_torrent_state in self.torrent_states.items():
+            persistence_torrent_state = ephemeral_torrent_state.persistent_state
+            filename = win_filesys_escape_uppercase(hash)
+            json_dump = json.dumps(persistence_torrent_state.to_dict())
+            with open(f"appdata/{filename}.ptor", "wt") as file:
+                file.write(json_dump)
+
 
     def __init__(self, io_thread_inbox: queue.Queue):
         super().__init__()
@@ -240,7 +251,6 @@ class IoThread(QThread):
 
                 elif message == "ui_quit":
                     stop_requested = True
-
                 else:
                     print(f"I/O thread: I/O message: {message}")
             except queue.Empty:
