@@ -55,12 +55,13 @@ def main():
                 del peers[sock]
             elif message_type == "harbor_message":
                 _, sock, peer_name, msg = message
+                print(msg)
                 try:
                     msg_command_type = msg[0]
                     if msg_command_type == "peer_info":
-                        _, json_info = msg
+                        _, dict_info = msg
                         if sock in peers:
-                            info = PeerInfo.from_dict(json.loads(json_info))
+                            info = PeerInfo.from_dict(dict_info)
                             peers[sock] = info
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
                     else:

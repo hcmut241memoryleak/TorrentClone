@@ -7,9 +7,9 @@ from torrent_data import TorrentStructure
 
 
 class PieceState(Enum):
-    PENDING_DOWNLOAD = "Pending download"
-    PENDING_CHECK = "Pending check"
-    COMPLETE = "Complete"
+    PENDING_DOWNLOAD = 0
+    PENDING_CHECK = 1
+    COMPLETE = 2
 
 
 class PersistentTorrentState:
@@ -28,28 +28,38 @@ class PersistentTorrentState:
         self.piece_states = piece_states
 
     def __repr__(self):
-        return f"LiveTorrent(torrent_hash={self.torrent_hash}, torrent_structure={self.torrent_structure}, base_path={self.base_path}, piece_states={self.piece_states})"
+        return f"PersistentTorrentState(torrent_hash={self.torrent_hash}, torrent_structure={self.torrent_structure}, base_path={self.base_path}, piece_states={self.piece_states})"
+
+    @staticmethod
+    def serialize_piece_states(piece_states: list[PieceState]) -> str:
+        return ''.join(str(state.value) for state in piece_states)
+
+    @staticmethod
+    def deserialize_piece_states(compact_str: str) -> list[PieceState]:
+        def convert_piece_state(value: int) -> PieceState:
+            try:
+                return PieceState(value)
+            except ValueError:
+                return PieceState.PENDING_DOWNLOAD
+        return [convert_piece_state(int(char)) for char in compact_str]
 
     def to_dict(self):
-        data = {
+        return {
             'torrent_hash': self.torrent_hash,
             'torrent_structure': self.torrent_structure.to_dict(),
             'torrent_name': self.torrent_name,
             'base_path': self.base_path,
-            'piece_states': self.piece_states
+            'piece_states': ''.join(str(state.value) for state in self.piece_states)
         }
-
-        return data
 
     @classmethod
     def from_dict(cls, data: dict):
-        torrent_structure = TorrentStructure.from_dict(data['torrent_structure'])
         return cls(
             torrent_hash=data['torrent_hash'],
-            torrent_structure=torrent_structure,
+            torrent_structure=TorrentStructure.from_dict(data['torrent_structure']),
             torrent_name=data['torrent_name'],
             base_path=data['base_path'],
-            piece_states=data['piece_states']
+            piece_states=cls.deserialize_piece_states(data['piece_states'])
         )
 
 
@@ -73,10 +83,37 @@ class EphemeralTorrentState:
         return cls(persistent_torrent_state, torrent_json)
 
 
+class AnnouncementTorrentState:
+    torrent_hash: str
+    piece_states: list[PieceState]
+
+    def __init__(self, torrent_hash: str, piece_states: list[PieceState]):
+        self.torrent_hash = torrent_hash
+        self.piece_states = piece_states
+
+    def __repr__(self):
+        return f"AnnouncementTorrentState(torrent_hash={self.torrent_hash}, piece_states={self.piece_states})"
+
+    def to_dict(self):
+        return {
+            'torrent_hash': self.torrent_hash,
+            'piece_states': PersistentTorrentState.serialize_piece_states(self.piece_states)
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(
+            torrent_hash=data['torrent_hash'],
+            piece_states=PersistentTorrentState.deserialize_piece_states(data['piece_states'])
+        )
+
+
 class EphemeralPeerState:
     peer_name: (str, int)
     peer_info: PeerInfo
+    torrent_states: list[AnnouncementTorrentState]
 
     def __init__(self, peer_name: (str, int)):
         self.peer_name = peer_name
         self.peer_info = PeerInfo()
+        self.torrent_states = []
