@@ -66,7 +66,6 @@ def main():
                 except Exception as e:
                     print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent malformed message: {e}")
             elif message == "harbor_stopped":
-                print(f"I/O thread: Harbor stopped.")
                 keep_running = False
         except queue.Empty:
             continue
@@ -75,11 +74,9 @@ def main():
 
         if stop_requested:
             stop_requested = False
-            print("I/O thread: stopping Harbor...")
             harbor.stop()
 
     executor.shutdown()
-    print("I/O thread: bye")
 
 if __name__ == "__main__":
     main()

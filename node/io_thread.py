@@ -153,7 +153,6 @@ class IoThread(QThread):
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
 
                 elif message == "harbor_stopped":
-                    print(f"I/O thread: Harbor stopped.")
                     keep_running = False
 
                 elif message_type == "ui_create_torrent":
@@ -176,8 +175,6 @@ class IoThread(QThread):
                 continue
             if stop_requested:
                 stop_requested = False
-                print("I/O thread: stopping Harbor...")
                 harbor.stop()
 
         executor.shutdown()
-        print("I/O thread: bye")
