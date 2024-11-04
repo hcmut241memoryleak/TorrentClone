@@ -42,13 +42,13 @@ def main():
             message_type = message[0]
             if message_type == "harbor_connection_added":
                 _, sock, peer_name = message
-                print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
+                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected.")
                 executor.submit(send_message, harbor, sock, ("motd", "From central tracker: have a great day!"))
 
                 peers[sock] = PeerInfo()
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name, caused_by_stop = message
-                print(f"I/O thread: disconnected from peer {peer_name[0]}:{peer_name[1]}.")
+                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} disconnected.")
 
                 del peers[sock]
             elif message_type == "harbor_message":
@@ -59,12 +59,12 @@ def main():
                         _, json_info = msg
                         if sock in peers:
                             info = PeerInfo.from_dict(json.loads(json_info))
-                            peers[sock].peer_id = info
+                            peers[sock] = info
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
                     else:
-                        print(f"I/O thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
+                        print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
                 except Exception as e:
-                    print(f"I/O thread: malformed message from peer {peer_name[0]}:{peer_name[1]}: {e}")
+                    print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent malformed message: {e}")
             elif message == "harbor_stopped":
                 print(f"I/O thread: Harbor stopped.")
                 keep_running = False

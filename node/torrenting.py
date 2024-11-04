@@ -1,6 +1,7 @@
 import json
 
 from hashing import base62_sha1_hash_of
+from peer_info import PeerInfo
 from torrent_data import TorrentStructure, TorrentFile
 
 class PersistentTorrentState:
@@ -54,3 +55,9 @@ class EphemeralTorrentState:
     def __init__(self, s: PersistentTorrentState, torrent_json: str):
         self.persistent_state = s
         self.torrent_json = torrent_json
+
+class EphemeralPeerState:
+    peer_info: PeerInfo
+
+    def __init__(self):
+        self.peer_info = PeerInfo()

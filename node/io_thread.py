@@ -9,7 +9,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
 from hashing import base62_sha1_hash_of
-from node.torrenting import PersistentTorrentState, EphemeralTorrentState
+from node.torrenting import PersistentTorrentState, EphemeralTorrentState, EphemeralPeerState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
@@ -85,7 +85,7 @@ class IoThread(QThread):
 
         executor = ThreadPoolExecutor(max_workers=5)
 
-        peers: dict[socket.socket, PeerInfo] = {}
+        peers: dict[socket.socket, EphemeralPeerState] = {}
         torrent_states: dict[str, EphemeralTorrentState] = {}
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -102,7 +102,7 @@ class IoThread(QThread):
         except ConnectionRefusedError as e:
             self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
             return
-        print(f"I/O thread: connected to tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT}. Adding to Harbor and sending info.")
+        print(f"I/O thread: tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
         harbor.socket_receiver_queue_add_client_command(tracker_sock)
         outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
         executor.submit(send_message, self.ui_thread_inbox, harbor, tracker_sock, outgoing_msg)
@@ -115,29 +115,43 @@ class IoThread(QThread):
             try:
                 message = self.io_thread_inbox.get(timeout=0.1)
                 message_type = message[0]
+
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
                     if sock != tracker_sock:
-                        print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
+                        peers[sock] = EphemeralPeerState()
+                        print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected. Sending info.")
+                        outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
+                        executor.submit(send_message, self.ui_thread_inbox, harbor, sock, outgoing_msg)
+
                 elif message_type == "harbor_connection_removed":
                     _, sock, peer_name, caused_by_stop = message
                     if sock == tracker_sock:
                         if caused_by_stop:
-                            print(f"I/O thread: disconnected from tracker {peer_name[0]}:{peer_name[1]}.")
+                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} disconnected.")
                         else:
-                            print(f"I/O thread: disconnected from tracker {peer_name[0]}:{peer_name[1]}! Stopping.")
+                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} disconnected! Stopping.")
                             stop_requested = True
+
                 elif message_type == "harbor_message":
                     _, sock, peer_name, msg = message
+                    msg_command_type = msg[0]
                     if sock == tracker_sock:
-                        msg_command_type = msg[0]
                         if msg_command_type == "motd":
                             _, motd = msg
-                            print(f"I/O thread: MOTD from tracker {peer_name[0]}:{peer_name[1]}: `{motd}`")
+                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
                         else:
-                            print(f"I/O thread: message from tracker {peer_name[0]}:{peer_name[1]}: {msg}")
+                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent: {msg}")
                     else:
-                        print(f"I/O thread: message from peer {peer_name[0]}:{peer_name[1]}: {msg}")
+                        if msg_command_type == "peer_info":
+                            _, json_info = msg
+                            if sock in peers:
+                                info = PeerInfo.from_dict(json.loads(json_info))
+                                peers[sock].peer_info = info
+                                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
+                        else:
+                            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
+
                 elif message == "harbor_stopped":
                     print(f"I/O thread: Harbor stopped.")
                     keep_running = False
@@ -157,8 +171,7 @@ class IoThread(QThread):
             except queue.Empty:
                 # TODO: torrent announce
                 for peer_socket, peer_info in peers.items():
-                    if peer_socket != tracker_sock:
-                        executor.submit(send_message, self.ui_thread_inbox, harbor, peer_socket, ("greet", "From peer: have a great day!"))
+                    executor.submit(send_message, self.ui_thread_inbox, harbor, peer_socket, ("greet", "From peer: have a great day!"))
 
                 continue
             if stop_requested:
