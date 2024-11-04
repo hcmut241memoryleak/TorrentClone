@@ -102,8 +102,10 @@ class IoThread(QThread):
         except ConnectionRefusedError as e:
             self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
             return
-        print(f"I/O thread: connected to tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT}. Adding to Harbor.")
+        print(f"I/O thread: connected to tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT}. Adding to Harbor and sending info.")
         harbor.socket_receiver_queue_add_client_command(tracker_sock)
+        outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
+        executor.submit(send_message, self.ui_thread_inbox, harbor, tracker_sock, outgoing_msg)
 
         self.ui_thread_inbox.emit("io_hi")
 
@@ -115,11 +117,7 @@ class IoThread(QThread):
                 message_type = message[0]
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
-                    if sock == tracker_sock:
-                        print(f"I/O thread: connected to tracker {peer_name[0]}:{peer_name[1]}. Sending info.")
-                        outgoing_msg = ("peer_info", json.dumps(my_peer_info.to_dict()))
-                        executor.submit(send_message, self.ui_thread_inbox, harbor, sock, outgoing_msg)
-                    else:
+                    if sock != tracker_sock:
                         print(f"I/O thread: connected to peer {peer_name[0]}:{peer_name[1]}.")
                 elif message_type == "harbor_connection_removed":
                     _, sock, peer_name, caused_by_stop = message
