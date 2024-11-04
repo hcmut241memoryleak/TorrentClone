@@ -14,6 +14,8 @@ class Harbor:
     __socket_receiver_daemon_inbox: queue.Queue
     __socket_receiver_daemon_signal_r: socket.socket
     __socket_receiver_daemon_signal_w: socket.socket
+    __socket_acceptor_daemon_signal_r: socket.socket
+    __socket_acceptor_daemon_signal_w: socket.socket
     __daemons_stop_event: threading.Event
     __sock_recv_thread: threading.Thread | None
     __sock_accp_thread: threading.Thread | None
@@ -25,6 +27,7 @@ class Harbor:
         self.__connections_lock = threading.Lock()
         self.__socket_receiver_daemon_inbox = queue.Queue()
         self.__socket_receiver_daemon_signal_r, self.__socket_receiver_daemon_signal_w = socket.socketpair()
+        self.__socket_acceptor_daemon_signal_r, self.__socket_acceptor_daemon_signal_w = socket.socketpair()
         self.__daemons_stop_event = threading.Event()
 
         self.__sock_recv_thread = None
@@ -109,19 +112,18 @@ class Harbor:
                         self.socket_receiver_queue_remove_client_command(selected_sock)
 
     def __socket_acceptor_daemon(self):
-        self.__server_socket.setblocking(False)
         while not self.__daemons_stop_event.is_set():
             try:
-                client_socket, client_address = self.__server_socket.accept()
-                client_socket.settimeout(5)
-                self.socket_receiver_queue_add_client_command(client_socket)
+                readable, _, _ = select.select([self.__server_socket, self.__socket_acceptor_daemon_signal_r], [], [])
+
+                if self.__server_socket in readable:
+                    client_socket, client_address = self.__server_socket.accept()
+                    client_socket.settimeout(5)
+                    self.socket_receiver_queue_add_client_command(client_socket)
             except socket.error as e:
-                if self.__daemons_stop_event.is_set():
-                    break
-                time.sleep(0.1)
+                continue
             except Exception as e:
                 print(f"Harbor @ acceptor thread: unexpected error: `{e}`")
-                time.sleep(0.1)
 
     def start(self):
         self.__sock_recv_thread = threading.Thread(target=self.__socket_receiver_daemon, daemon=True)
@@ -134,5 +136,12 @@ class Harbor:
         self.socket_receiver_queue_stop_command()
         self.__daemons_stop_event.set()
         self.__socket_receiver_daemon_signal_w.send(b'\x01')
+        self.__socket_acceptor_daemon_signal_w.send(b'\x01')
+
         self.__sock_recv_thread.join()
         self.__sock_accp_thread.join()
+
+        self.__socket_receiver_daemon_signal_r.close()
+        self.__socket_receiver_daemon_signal_w.close()
+        self.__socket_acceptor_daemon_signal_r.close()
+        self.__socket_acceptor_daemon_signal_w.close()
