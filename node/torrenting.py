@@ -1,4 +1,5 @@
 import json
+import threading
 from enum import Enum
 
 from hashing import base62_sha256_hash_of
@@ -112,18 +113,22 @@ class NodeEphemeralPeerState:
     peer_name: (str, int)
     peer_info: PeerInfo
     torrent_states: list[AnnouncementTorrentState]
+    send_lock: threading.Lock
 
     def __init__(self, peer_name: (str, int)):
         self.peer_name = peer_name
         self.peer_info = PeerInfo()
         self.torrent_states = []
+        self.send_lock = threading.Lock()
 
 class TrackerEphemeralPeerState:
     peer_name: (str, int)
     peer_info: PeerInfo
     sha256_hashes: list[str]
+    send_lock: threading.Lock
 
     def __init__(self, peer_name: (str, int)):
         self.peer_name = peer_name
         self.peer_info = PeerInfo()
         self.sha256_hashes = []
+        self.send_lock = threading.Lock()

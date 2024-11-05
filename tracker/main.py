@@ -2,6 +2,7 @@ import json
 import queue
 import socket
 import struct
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from harbor import Harbor
@@ -14,14 +15,25 @@ TRACKER_PORT = 65432
 main_thread_inbox = queue.Queue()
 
 
-def send_message(harbor: Harbor, sock: socket, message):
+def send_bytes(harbor: Harbor, sock: socket, socket_lock: threading.Lock, b: bytes):
+    peer_name = "(broken socket)"
     try:
-        message_data = json.dumps(message).encode("utf-8")
-        packed_data = struct.pack(">I", len(message_data)) + message_data
-        sock.sendall(packed_data)
+        peer_name = sock.getpeername()
+        with socket_lock:
+            sock.sendall(b)
     except Exception as e:
-        print(f"Error sending data to {sock.getpeername()}: {e}")
+        print(f"Error sending data to {peer_name}: {e}")
         harbor.socket_receiver_queue_remove_client_command(sock)
+
+
+def send_message(harbor: Harbor, sock: socket, socket_lock: threading.Lock, message):
+    try:
+        json_message = json.dumps(message).encode("utf-8")
+        packed_data = struct.pack(">I", len(json_message)) + json_message
+        send_bytes(harbor, sock, socket_lock, packed_data)
+    except Exception as e:
+        print(f"Error serializing message `{message}`: {e}")
+        return
 
 
 def main():
@@ -46,9 +58,9 @@ def main():
             if message_type == "harbor_connection_added":
                 _, sock, peer_name = message
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected.")
-                executor.submit(send_message, harbor, sock, ("motd", "From central tracker: have a great day!"))
+                peers[sock] = TrackerEphemeralPeerState(peer_name)
 
-                peers[sock] = PeerInfo()
+                executor.submit(send_message, harbor, sock, peers[sock].send_lock, ("motd", "From central tracker: have a great day!"))
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name, caused_by_stop = message
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} disconnected.")

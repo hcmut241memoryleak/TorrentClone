@@ -3,6 +3,7 @@ import os
 import queue
 import socket
 import struct
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -63,64 +64,65 @@ class IoThread(QThread):
     io_thread_inbox: queue.Queue
 
     tracker_socket: socket.socket
+    tracker_socket_lock: threading.Lock
     peers: dict[socket.socket, NodeEphemeralPeerState]
     torrent_states: dict[str, EphemeralTorrentState]
 
     harbor: Harbor
     executor: ThreadPoolExecutor
 
-    def save_state_to_disk(self):
-        if not os.path.exists("appdata"):
-            os.mkdir("appdata")
-        for hash, ephemeral_torrent_state in self.torrent_states.items():
-            persistence_torrent_state = ephemeral_torrent_state.persistent_state
-            filename = win_filesys_escape_uppercase(hash)
-            json_dump = json.dumps(persistence_torrent_state.to_dict())
-            with open(f"appdata/{filename}.ptor", "wt") as file:
-                file.write(json_dump)
-
-
     def __init__(self, io_thread_inbox: queue.Queue):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
+        self.tracker_socket_lock = threading.Lock()
         self.peers = {}
         self.torrent_states = {}
 
-    def send_message(self, sock: socket, message):
-        try:
-            message_data = json.dumps(message).encode("utf-8")
-            packed_data = struct.pack(">I", len(message_data)) + message_data
-        except Exception as e:
-            err_string = f"Error serializing message `{message}`: {e}"
-            print(err_string)
-            self.ui_thread_inbox.emit(("io_error", err_string))
-            return
+    def save_state_to_disk(self):
+        if not os.path.exists("appdata"):
+            os.mkdir("appdata")
+        for sha256_hash, ephemeral_torrent_state in self.torrent_states.items():
+            persistence_torrent_state = ephemeral_torrent_state.persistent_state
+            filename = win_filesys_escape_uppercase(sha256_hash)
+            json_dump = json.dumps(persistence_torrent_state.to_dict())
+            with open(f"appdata/{filename}.ptors", "wt") as file:
+                file.write(json_dump)
 
+    def send_bytes(self, sock: socket, socket_lock: threading.Lock, b: bytes):
+        peer_name = "(broken socket)"
         try:
-            sock.sendall(packed_data)
+            peer_name = sock.getpeername()
+            with socket_lock:
+                sock.sendall(b)
         except Exception as e:
-            print(f"Error sending data to {sock.getpeername()}: {e}")
-            self.ui_thread_inbox.emit(("io_error", f"Error sending data to {sock.getpeername()}: {e}"))
+            error_string = f"Error sending data to {peer_name}: {e}"
+            print(error_string)
+            self.ui_thread_inbox.emit(("io_error", error_string))
             self.harbor.socket_receiver_queue_remove_client_command(sock)
 
-
-    def mass_send_message(self, socks: list[socket], message):
+    def send_message(self, sock: socket, socket_lock: threading.Lock, message):
         try:
-            message_data = json.dumps(message).encode("utf-8")
-            packed_data = struct.pack(">I", len(message_data)) + message_data
+            json_message = json.dumps(message).encode("utf-8")
+            packed_data = struct.pack(">I", len(json_message)) + json_message
+            self.send_bytes(sock, socket_lock, packed_data)
         except Exception as e:
-            err_string = f"Error serializing message `{message}`: {e}"
-            print(err_string)
-            self.ui_thread_inbox.emit(("io_error", err_string))
+            error_string = f"Error serializing message `{message}`: {e}"
+            print(error_string)
+            self.ui_thread_inbox.emit(("io_error", error_string))
             return
 
-        for sock in socks:
-            try:
-                sock.sendall(packed_data)
-            except Exception as e:
-                print(f"Error sending data to {sock.getpeername()}: {e}")
-                self.ui_thread_inbox.emit(("io_error", f"Error sending data to {sock.getpeername()}: {e}"))
-                self.harbor.socket_receiver_queue_remove_client_command(sock)
+    def mass_send_message(self, socks: list[tuple[socket, threading.Lock]], message):
+        try:
+            json_message = json.dumps(message).encode("utf-8")
+            packed_data = struct.pack(">I", len(json_message)) + json_message
+        except Exception as e:
+            error_string = f"Error serializing message `{message}`: {e}"
+            print(error_string)
+            self.ui_thread_inbox.emit(("io_error", error_string))
+            return
+
+        for sock, socket_lock in socks:
+            self.executor.submit(self.send_bytes, sock, socket_lock, packed_data)
 
     def ui_update_peers_view(self):
         self.ui_thread_inbox.emit(("io_peers_changed", self.peers))
@@ -132,7 +134,7 @@ class IoThread(QThread):
         tracker_announcement_message = ("peer_torrent_list", [
             torrent_state.persistent_state.sha256_hash for torrent_state in self.torrent_states.values()
         ])
-        self.executor.submit(self.send_message, self.tracker_socket, tracker_announcement_message)
+        self.executor.submit(self.send_message, self.tracker_socket, self.tracker_socket_lock, tracker_announcement_message)
 
     def announce_torrents_to_peers(self):
         if len(self.torrent_states) != 0:
@@ -142,7 +144,8 @@ class IoThread(QThread):
                     piece_states=torrent_state.persistent_state.piece_states
                 ).to_dict() for torrent_state in self.torrent_states.values()
             ])
-            self.executor.submit(self.mass_send_message, list(self.peers.keys()), node_announcement_message)
+            socks = [(sock, state.send_lock) for sock, state in self.peers.items()]
+            self.executor.submit(self.mass_send_message, socks, node_announcement_message)
 
     def run(self):
         my_peer_id = generate_unique_id()
@@ -152,7 +155,7 @@ class IoThread(QThread):
         my_peer_info.peer_id = my_peer_id
         my_peer_info.peer_port = PEER_PORT
 
-        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.executor = ThreadPoolExecutor(max_workers=16)
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind((PEER_HOST, PEER_PORT))
@@ -171,7 +174,7 @@ class IoThread(QThread):
         print(
             f"I/O thread: tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
         self.harbor.socket_receiver_queue_add_client_command(self.tracker_socket)
-        self.executor.submit(self.send_message, self.tracker_socket, ("peer_info", my_peer_info.to_dict()))
+        self.executor.submit(self.send_message, self.tracker_socket, self.tracker_socket_lock, ("peer_info", my_peer_info.to_dict()))
 
         self.ui_thread_inbox.emit("io_hi")
 
@@ -191,7 +194,7 @@ class IoThread(QThread):
                         self.peers[sock] = NodeEphemeralPeerState(peer_name)
                         print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected. Sending info.")
                         outgoing_msg = ("peer_info", my_peer_info.to_dict())
-                        self.executor.submit(self.send_message, sock, outgoing_msg)
+                        self.executor.submit(self.send_message, sock, self.peers[sock].send_lock, outgoing_msg)
 
                         self.ui_update_peers_view()
 
@@ -260,7 +263,7 @@ class IoThread(QThread):
             if current_time - last_reannounced_torrents_to_peers >= 2: # reannounce every 2 seconds
                 last_reannounced_torrents_to_peers = current_time
                 self.announce_torrents_to_peers()
-            # Reannouncements to tracker is currently disabled! I will only reannouce when torrents are added/removed.
+            # Reannouncements to tracker is currently disabled! I will only reannounce when torrents are added/removed.
             # It is up to the peers to individually announce to each other about their torrent progresses (i.e. piece states).
             # if current_time - last_reannounced_torrents_to_tracker >= 10: # reannounce every 10 seconds
             #     last_reannounced_torrents_to_tracker = current_time
