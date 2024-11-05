@@ -2,7 +2,7 @@ import hashlib
 
 
 def to_base62(num):
-    characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    characters = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
     base = len(characters)
     if num == 0:
         return characters[0]
