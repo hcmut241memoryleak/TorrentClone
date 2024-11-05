@@ -27,9 +27,9 @@ def win_filesys_unescape_uppercase(s: str) -> str:
     unescaped = []
     i = 0
     while i < len(s):
-        if s[i] == '-' and i + 1 < len(s) and s[i + 1].islower():
-            unescaped.append(s[i + 1].upper())  # Convert to uppercase
-            i += 2  # Skip the next character
+        if s[i] == '-' and i + 1 < len(s):
+            unescaped.append(s[i + 1].upper())
+            i += 2
         else:
             unescaped.append(s[i])
             i += 1

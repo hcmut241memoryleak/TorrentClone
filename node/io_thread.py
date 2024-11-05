@@ -10,8 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from harbor import Harbor
-from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_filesys_unescape_uppercase
-from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PieceState, AnnouncementTorrentState
+from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_filesys_unescape_uppercase, \
+    base62_sha256_hash_of
+from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PieceState, AnnouncementTorrentState, \
+    PersistentTorrentState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
@@ -20,6 +22,9 @@ TARGET_TRACKER_PORT = 65432
 
 PEER_HOST = '127.0.0.1'
 PEER_PORT = 65433
+
+TORRENT_STRUCTURE_FILE_SUFFIX = ".torj"
+PERSISTENT_TORRENT_STATE_FILE_SUFFIX = ".ptors"
 
 
 def files_from_path(base_path: str):
@@ -71,22 +76,82 @@ class IoThread(QThread):
     harbor: Harbor
     executor: ThreadPoolExecutor
 
+    appdata_path: str
+
     def __init__(self, io_thread_inbox: queue.Queue):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
         self.tracker_socket_lock = threading.Lock()
         self.peers = {}
         self.torrent_states = {}
+        self.appdata_path = os.path.join(os.getcwd(), "appdata")
 
-    def save_state_to_disk(self):
-        if not os.path.exists("appdata"):
-            os.mkdir("appdata")
-        for sha256_hash, ephemeral_torrent_state in self.torrent_states.items():
-            persistence_torrent_state = ephemeral_torrent_state.persistent_state
-            filename = win_filesys_escape_uppercase(sha256_hash)
-            json_dump = json.dumps(persistence_torrent_state.to_dict())
-            with open(f"appdata/{filename}.ptors", "wt") as file:
-                file.write(json_dump)
+    def load_torrent_states_from_disk(self):
+        folder = os.path.join(self.appdata_path, "torrents")
+        if not os.path.isdir(folder):
+            return
+        for file in os.listdir(folder):
+            if file.endswith(PERSISTENT_TORRENT_STATE_FILE_SUFFIX):
+                apparent_escaped_sha256_hash = file[:-len(PERSISTENT_TORRENT_STATE_FILE_SUFFIX)]
+
+                torrent_structure_file = os.path.join(folder, f"{apparent_escaped_sha256_hash}{TORRENT_STRUCTURE_FILE_SUFFIX}")
+                if not os.path.isfile(torrent_structure_file):
+                    print(f"I/O thread: accompanying torrent structure file for {file} not found. Skipping.")
+                    continue
+
+                apparent_unescaped_sha256_hash = win_filesys_unescape_uppercase(apparent_escaped_sha256_hash)
+
+                try:
+                    with open(os.path.join(folder, file), "rb") as bin_file:
+                        persistent_data = bin_file.read()
+                    persistent_state = PersistentTorrentState.from_dict(json.loads(persistent_data.decode("utf-8")))
+                except Exception as e:
+                    print(f"I/O thread: could not load persistent torrent state file {file}: {e}. Skipping.")
+                    continue
+
+                try:
+                    with open(os.path.join(folder, torrent_structure_file), "rb") as bin_file:
+                        structure_data = bin_file.read()
+                    true_hash = base62_sha256_hash_of(structure_data)
+                    if true_hash != apparent_unescaped_sha256_hash:
+                        print(f"I/O thread: SHA256 hash of torrent structure file {e} doesn't match its own filename. Skipping.")
+                        continue
+                    structure_json = structure_data.decode("utf-8")
+                    structure = TorrentStructure.from_dict(json.loads(structure_json))
+                except Exception as e:
+                    print(f"I/O thread: could not load torrent structure file {file}: {e}. Skipping.")
+                    continue
+
+                self.torrent_states[true_hash] = EphemeralTorrentState(structure, structure_json, persistent_state)
+        # for sha256_hash, ephemeral_state in self.torrent_states.items():
+        #     filepath = os.path.join(self.appdata_path, f"torrents/{win_filesys_escape_uppercase(sha256_hash)}.ptors")
+        #     json_dump = json.dumps(ephemeral_state.persistent_state.to_dict())
+        #     with open(filepath, "wt") as file:
+        #         file.write(json_dump)
+
+    def save_torrent_states_to_disk(self):
+        if not os.path.exists(self.appdata_path):
+            os.mkdir(self.appdata_path)
+        for sha256_hash, ephemeral_state in self.torrent_states.items():
+            escaped_hash = win_filesys_escape_uppercase(sha256_hash)
+
+            state_filepath = os.path.join(self.appdata_path, f"torrents/{escaped_hash}{PERSISTENT_TORRENT_STATE_FILE_SUFFIX}")
+            state_json_dump = json.dumps(ephemeral_state.persistent_state.to_dict()).encode("utf-8")
+            try:
+                with open(state_filepath, "wb") as file:
+                    file.write(state_json_dump)
+            except Exception as e:
+                print(f"I/O thread: could not write file {state_filepath}: {e}. Data loss.")
+                continue
+
+            structure_filepath = os.path.join(self.appdata_path, f"torrents/{escaped_hash}{TORRENT_STRUCTURE_FILE_SUFFIX}")
+            structure_json = ephemeral_state.torrent_json.encode("utf-8")
+            try:
+                with open(structure_filepath, "wb") as file:
+                    file.write(structure_json)
+            except Exception as e:
+                print(f"I/O thread: could not write file {structure_filepath}: {e}. Data loss.")
+                continue
 
     def send_bytes(self, sock: socket, socket_lock: threading.Lock, b: bytes):
         peer_name = "(broken socket)"
@@ -148,6 +213,8 @@ class IoThread(QThread):
             self.executor.submit(self.mass_send_message, socks, node_announcement_message)
 
     def run(self):
+        self.load_torrent_states_from_disk()
+
         my_peer_id = generate_unique_id()
         print(f"I/O thread: ID is {my_peer_id}")
 
@@ -168,7 +235,7 @@ class IoThread(QThread):
         self.tracker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.tracker_socket.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
-        except ConnectionRefusedError as e:
+        except Exception as e:
             self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
             return
         print(
@@ -177,6 +244,10 @@ class IoThread(QThread):
         self.executor.submit(self.send_message, self.tracker_socket, self.tracker_socket_lock, ("peer_info", my_peer_info.to_dict()))
 
         self.ui_thread_inbox.emit("io_hi")
+
+        if len(self.torrent_states) > 0:
+            self.ui_update_torrents_view()
+            self.announce_torrents_to_tracker()
 
         last_reannounced_torrents_to_tracker = time.time()
         last_reannounced_torrents_to_peers = time.time()
@@ -274,3 +345,4 @@ class IoThread(QThread):
                 self.harbor.stop()
 
         self.executor.shutdown()
+        self.save_torrent_states_to_disk()
