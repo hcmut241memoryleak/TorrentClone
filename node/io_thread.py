@@ -206,7 +206,7 @@ class IoThread(QThread):
             node_announcement_message = ("peer_torrent_announcement", [
                 AnnouncementTorrentState(
                     sha256_hash=torrent_state.persistent_state.sha256_hash,
-                    piece_states=torrent_state.persistent_state.piece_states
+                    piece_states=[state == PieceState.COMPLETE for state in torrent_state.persistent_state.piece_states]
                 ).to_dict() for torrent_state in self.torrent_states.values()
             ])
             socks = [(sock, state.send_lock) for sock, state in self.peers.items()]

@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 from enum import Enum
@@ -83,26 +84,45 @@ class EphemeralTorrentState:
 
 class AnnouncementTorrentState:
     sha256_hash: str
-    piece_states: list[PieceState]
+    piece_states: list[bool]
 
-    def __init__(self, sha256_hash: str, piece_states: list[PieceState]):
+    def __init__(self, sha256_hash: str, piece_states: list[bool]):
         self.sha256_hash = sha256_hash
         self.piece_states = piece_states
 
     def __repr__(self):
         return f"AnnouncementTorrentState(sha256_hash={self.sha256_hash}, piece_states={self.piece_states})"
 
+    @staticmethod
+    def serialize_piece_states(piece_states: list[bool]) -> str:
+        byte_array = bytearray()
+        for i in range(0, len(piece_states), 8):
+            chunk = piece_states[i:i + 8]
+            byte = sum(1 << (7 - j) for j, bit in enumerate(chunk) if bit)
+            byte_array.append(byte)
+        b64_encoded = base64.b64encode(byte_array)
+        return b64_encoded.decode('utf-8')
+
+    @staticmethod
+    def deserialize_piece_states(b64: str) -> list[bool]:
+        byte_array = base64.b64decode(b64)
+        states = []
+        for byte in byte_array:
+            for i in range(8):
+                states.append(bool((byte >> (7 - i)) & 1))
+        return states
+
     def to_dict(self):
         return {
             'sha256_hash': self.sha256_hash,
-            'piece_states': PersistentTorrentState.serialize_piece_states(self.piece_states)
+            'piece_states': self.serialize_piece_states(self.piece_states)
         }
 
     @classmethod
     def from_dict(cls, data: dict):
         return cls(
             sha256_hash=data['sha256_hash'],
-            piece_states=PersistentTorrentState.deserialize_piece_states(data['piece_states'])
+            piece_states=cls.deserialize_piece_states(data['piece_states'])
         )
 
 
