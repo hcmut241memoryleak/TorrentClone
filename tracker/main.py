@@ -101,7 +101,8 @@ def main():
                                         if not any(sha256_hash in peer_state.sha256_hashes for sha256_hash in other_state.sha256_hashes):
                                             continue
                                         other_peers.append((other_state.peer_info.peer_id, other_state.peer_name[0], other_state.peer_info.peer_port))
-                                    executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers", other_peers)
+                                    if len(other_peers) > 0:
+                                        executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers", other_peers)
                             except Exception as e:
                                 pass
                     else:
