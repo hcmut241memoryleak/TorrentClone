@@ -39,18 +39,22 @@ def files_from_path(base_path: str):
     return base_path, file_paths
 
 
+def get_piece_data(base_path: str, files: list[TorrentFile], piece: Piece, piece_size: int):
+    data = b""
+    for section in piece.sections:
+        file = files[section.file_index]
+        file_path = os.path.join(base_path, file.path)
+        with open(file_path, "rb") as file:
+            file.seek(section.file_offset)
+            data += file.read(section.length)
+    if len(data) < piece_size:
+        data += b"\x00" * (piece_size - len(data))
+    return data
+
+
 def initiate_piece_hashes(base_path: str, files: list[TorrentFile], pieces: list[Piece], piece_size: int):
     for piece in pieces:
-        data = b""
-        for section in piece.sections:
-            file = files[section.file_index]
-            file_path = os.path.join(base_path, file.path)
-            with open(file_path, "rb") as file:
-                file.seek(section.file_offset)
-                data += file.read(section.length)
-        if len(data) < piece_size:
-            data += b"\x00" * (piece_size - len(data))
-        piece.base_62_sha1 = base62_sha1_hash_of(data)
+        piece.base_62_sha1 = base62_sha1_hash_of(get_piece_data(base_path, files, piece, piece_size))
 
 
 def create_ephemeral_torrent_state_from_path(raw_path: str, torrent_name: str, piece_size: int):
@@ -165,21 +169,26 @@ class IoThread(QThread):
             self.ui_thread_inbox.emit(("io_error", error_string))
             self.harbor.socket_receiver_queue_remove_client_command(sock)
 
-    def send_message(self, sock: socket, socket_lock: threading.Lock, message):
+    def send_message(self, sock: socket, socket_lock: threading.Lock, tag: str, data: bytes):
+        tag_bytes = tag.encode("utf-8")
+        packed_data = struct.pack(">II", len(tag_bytes), len(data)) + tag_bytes + data
+        self.send_bytes(sock, socket_lock, packed_data)
+
+    def send_json_message(self, sock: socket, socket_lock: threading.Lock, tag: str, message):
         try:
-            json_message = json.dumps(message).encode("utf-8")
-            packed_data = struct.pack(">I", len(json_message)) + json_message
-            self.send_bytes(sock, socket_lock, packed_data)
+            json_data = json.dumps(message).encode("utf-8")
+            self.send_message(sock, socket_lock, tag, json_data)
         except Exception as e:
             error_string = f"Error serializing message `{message}`: {e}"
             print(error_string)
             self.ui_thread_inbox.emit(("io_error", error_string))
             return
 
-    def mass_send_message(self, socks: list[tuple[socket, threading.Lock]], message):
+    def mass_send_json_message(self, socks: list[tuple[socket, threading.Lock]], tag: str, message):
         try:
-            json_message = json.dumps(message).encode("utf-8")
-            packed_data = struct.pack(">I", len(json_message)) + json_message
+            json_data = json.dumps(message).encode("utf-8")
+            tag_bytes = tag.encode("utf-8")
+            packed_data = struct.pack(">II", len(tag_bytes) + len(json_data)) + tag_bytes + json_data
         except Exception as e:
             error_string = f"Error serializing message `{message}`: {e}"
             print(error_string)
@@ -196,21 +205,31 @@ class IoThread(QThread):
         self.ui_thread_inbox.emit(("io_torrents_changed", self.torrent_states))
 
     def announce_torrents_to_tracker(self):
-        tracker_announcement_message = ("peer_torrent_list", [
+        tracker_announcement_message = [
             torrent_state.persistent_state.sha256_hash for torrent_state in self.torrent_states.values()
-        ])
-        self.executor.submit(self.send_message, self.tracker_socket, self.tracker_socket_lock, tracker_announcement_message)
+        ]
+        self.executor.submit(self.send_json_message, self.tracker_socket, self.tracker_socket_lock, "peer_torrent_list", tracker_announcement_message)
 
     def announce_torrents_to_peers(self):
         if len(self.torrent_states) != 0:
-            node_announcement_message = ("peer_torrent_announcement", [
+            node_announcement_message = [
                 AnnouncementTorrentState(
                     sha256_hash=torrent_state.persistent_state.sha256_hash,
                     piece_states=[state == PieceState.COMPLETE for state in torrent_state.persistent_state.piece_states]
                 ).to_dict() for torrent_state in self.torrent_states.values()
-            ])
+            ]
             socks = [(sock, state.send_lock) for sock, state in self.peers.items()]
-            self.executor.submit(self.mass_send_message, socks, node_announcement_message)
+            self.executor.submit(self.mass_send_json_message, socks, "peer_torrent_announcement", node_announcement_message)
+
+    def send_piece_to_peer(self, ephemeral_torrent_state: EphemeralTorrentState, piece_index: int, peer_sock: socket.socket, peer_socket_lock: threading.Lock):
+        if piece_index < len(ephemeral_torrent_state.persistent_state.piece_states) and ephemeral_torrent_state.persistent_state.piece_states[piece_index] == PieceState.COMPLETE:
+            base_path = ephemeral_torrent_state.persistent_state.base_path
+            files = ephemeral_torrent_state.torrent_structure.files
+            piece = ephemeral_torrent_state.torrent_structure.pieces[piece_index]
+            piece_size = ephemeral_torrent_state.torrent_structure.piece_size
+            piece_data = get_piece_data(base_path, files, piece, piece_size)
+
+
 
     def run(self):
         self.load_torrent_states_from_disk()
@@ -241,7 +260,7 @@ class IoThread(QThread):
         print(
             f"I/O thread: tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
         self.harbor.socket_receiver_queue_add_client_command(self.tracker_socket)
-        self.executor.submit(self.send_message, self.tracker_socket, self.tracker_socket_lock, ("peer_info", my_peer_info.to_dict()))
+        self.executor.submit(self.send_json_message, self.tracker_socket, self.tracker_socket_lock, "peer_info", my_peer_info.to_dict())
 
         self.ui_thread_inbox.emit("io_hi")
 
@@ -264,8 +283,8 @@ class IoThread(QThread):
                     if sock != self.tracker_socket:
                         self.peers[sock] = NodeEphemeralPeerState(peer_name)
                         print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected. Sending info.")
-                        outgoing_msg = ("peer_info", my_peer_info.to_dict())
-                        self.executor.submit(self.send_message, sock, self.peers[sock].send_lock, outgoing_msg)
+                        outgoing_msg = my_peer_info.to_dict()
+                        self.executor.submit(self.send_json_message, sock, self.peers[sock].send_lock, "peer_info", outgoing_msg)
 
                         self.ui_update_peers_view()
 
@@ -283,29 +302,31 @@ class IoThread(QThread):
                         self.ui_update_peers_view()
 
                 elif message_type == "harbor_message":
-                    _, sock, peer_name, msg = message
-                    msg_command_type = msg[0]
+                    _, sock, peer_name, tag, msg = message
                     if sock == self.tracker_socket:
-                        if msg_command_type == "motd":
-                            _, motd = msg
+                        if tag == "motd":
+                            motd = json.loads(msg.decode("utf-8"))
                             print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
                         else:
-                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent: {msg}")
+                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent unknown message `{tag}` with {len(msg)} bytes")
                     else:
-                        if msg_command_type == "peer_info":
-                            _, dict_info = msg
+                        if tag == "peer_info":
                             if sock in self.peers:
-                                info = PeerInfo.from_dict(dict_info)
-                                self.peers[sock].peer_info = info
-                                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
-                                self.ui_update_peers_view()
-                        elif msg_command_type == "peer_torrent_announcement":
-                            _, dicts_torrent_states = msg
-                            if sock in self.peers:
-                                torrent_states = [AnnouncementTorrentState.from_dict(d) for d in dicts_torrent_states]
+                                try:
+                                    info = PeerInfo.from_dict(json.loads(msg.decode("utf-8")))
+                                    self.peers[sock].peer_info = info
+                                    print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
+                                    self.ui_update_peers_view()
+                                except Exception as e:
+                                    pass
+                        elif tag == "peer_torrent_announcement":
+                            try:
+                                torrent_states = [AnnouncementTorrentState.from_dict(d) for d in json.loads(msg.decode("utf-8"))]
                                 self.peers[sock].torrent_states = torrent_states
                                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
                                 self.ui_update_peers_view()
+                            except Exception as e:
+                                pass
                         else:
                             print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
 

@@ -9,12 +9,12 @@ import select
 
 class HarborSocketState:
     is_receiving_message: bool
-    current_message_length: int
+    current_message_lengths: tuple[int, int]
     current_message_buffer: bytes
 
     def __init__(self):
         self.is_receiving_message = False
-        self.current_message_length = 0
+        self.current_message_lengths = (0, 0)
         self.current_message_buffer = b""
 
 
@@ -44,25 +44,28 @@ class Harbor:
         try:
             state = self.__connections[sock]
             if state.is_receiving_message:
-                input_bytes = sock.recv(state.current_message_length - len(state.current_message_buffer))
+                expected_total_length = state.current_message_lengths[0] + state.current_message_lengths[1]
+                input_bytes = sock.recv(expected_total_length - len(state.current_message_buffer))
                 if not input_bytes:
                     return False
                 state.current_message_buffer += input_bytes
-                if len(state.current_message_buffer) >= state.current_message_length:
-                    json_data = json.loads(state.current_message_buffer.decode("utf-8"))
-                    self.__io_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
+                if len(state.current_message_buffer) >= expected_total_length:
+                    tag_length = state.current_message_lengths[0]
+                    tag = state.current_message_buffer[:tag_length].decode("utf-8")
+                    data = state.current_message_buffer[tag_length:]
+                    self.__io_thread_inbox.put(("harbor_message", sock, peer_name, tag, data))
 
                     state.is_receiving_message = False
                     state.current_message_buffer = b""
 
                 return True
             else:
-                input_bytes = sock.recv(4 - len(state.current_message_buffer))
+                input_bytes = sock.recv(8 - len(state.current_message_buffer))
                 if not input_bytes:
                     return False
                 state.current_message_buffer += input_bytes
-                if len(state.current_message_buffer) >= 4:
-                    state.current_message_length = struct.unpack(">I", state.current_message_buffer)[0]
+                if len(state.current_message_buffer) >= 8:
+                    state.current_message_lengths = struct.unpack(">II", state.current_message_buffer)
 
                     state.is_receiving_message = True
                     state.current_message_buffer = b""
