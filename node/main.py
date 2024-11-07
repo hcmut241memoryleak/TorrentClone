@@ -7,9 +7,8 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox, QListWidget, QListWidgetItem
 
-from hashing import win_filesys_escape_uppercase, win_filesys_unescape_uppercase, base62_sha256_hash_of
 from node.io_thread import IoThread, TORRENT_STRUCTURE_FILE_SUFFIX
-from node.torrenting import EphemeralTorrentState, PieceState
+from node.torrenting import EphemeralTorrentState
 
 io_thread_inbox = queue.Queue()
 
@@ -281,8 +280,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.torrent_list)
 
         self.setLayout(layout)
-        self.setWindowTitle("HK241/MemoryLeak: TorrentClone (Qt UI)")
-        self.resize(1280, 720)
+        self.resize(640, 480)
         self.setMinimumSize(600, 400)
 
     def open_torrent_creation_dialog(self):
@@ -307,25 +305,15 @@ class MainWindow(QWidget):
             _, torrents = message
             self.update_torrent_list(torrents)
 
-    def format_piece_states(self, piece_states: list[PieceState]) -> str:
+    def format_piece_states(self, piece_states: list[bool]) -> str:
         total_pieces = len(piece_states)
-        completed_pieces = piece_states.count(PieceState.COMPLETE)
+        completed_pieces = piece_states.count(True)
 
         if completed_pieces == total_pieces:
             return "Complete"
 
-        pending_download = piece_states.count(PieceState.PENDING_DOWNLOAD)
-        pending_check = piece_states.count(PieceState.PENDING_CHECK)
-
         completion_percentage = (completed_pieces / total_pieces) * 100
-
-        status_parts = [f"{completion_percentage:.1f}%"]
-        if pending_download > 0:
-            status_parts.append(f"{pending_download}pcs pending download")
-        if pending_check > 0:
-            status_parts.append(f"{pending_check}pcs pending recheck")
-
-        return " (" + ", ".join(status_parts) + ")"
+        return f"{completion_percentage:.1f}% ({completed_pieces}/{total_pieces} pcs)"
 
     def update_torrent_list(self, torrent_states: dict[str, EphemeralTorrentState]):
         self.torrent_list.clear()
@@ -345,16 +333,23 @@ class MainWindow(QWidget):
 
 
 def main():
+    window_title = "HK241/MemoryLeak: TorrentClone (Qt UI)"
+
     app = QApplication(sys.argv)
 
     parser = QCommandLineParser()
     port_option = QCommandLineOption("port", "The port that other peers should connect to.", "port", "65433")
-    appdata_option = QCommandLineOption("appdata", "App data location", "appdata", "appdata")
+    appdata_option = QCommandLineOption("appdata", "App data location.", "appdata", "appdata")
+    window_title_suffix_option = QCommandLineOption("window-title-suffix", "Window title suffix.", "suffix")
     parser.addOption(port_option)
     parser.addOption(appdata_option)
+    parser.addOption(window_title_suffix_option)
     parser.process(app)
 
     main_window = MainWindow(parser.value(port_option), parser.value(appdata_option))
+    if parser.isSet(window_title_suffix_option):
+        window_title = f"{window_title} - {parser.value(window_title_suffix_option)}"
+    main_window.setWindowTitle(window_title)
     main_window.show()
     sys.exit(app.exec())
 

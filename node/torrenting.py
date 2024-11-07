@@ -12,20 +12,14 @@ from torrent_data import TorrentStructure
 # Serializables
 
 
-class PieceState(Enum):
-    PENDING_DOWNLOAD = 0
-    PENDING_CHECK = 1
-    COMPLETE = 2
-
-
 class PersistentTorrentState:
     sha256_hash: str
     torrent_name: str
     base_path: str
-    piece_states: list[PieceState]
+    piece_states: list[bool]
 
     def __init__(self, sha256_hash: str, base_path: str, torrent_name: str,
-                 piece_states: list[PieceState]):
+                 piece_states: list[bool]):
         self.sha256_hash = sha256_hash
         self.torrent_name = torrent_name
         self.base_path = base_path
@@ -35,24 +29,19 @@ class PersistentTorrentState:
         return f"PersistentTorrentState(sha256_hash={self.sha256_hash}, base_path={self.base_path}, piece_states={self.piece_states})"
 
     @staticmethod
-    def serialize_piece_states(piece_states: list[PieceState]) -> str:
-        return ''.join(str(state.value) for state in piece_states)
+    def serialize_piece_states(piece_states: list[bool]) -> str:
+        return ''.join(str(int(state)) for state in piece_states)
 
     @staticmethod
-    def deserialize_piece_states(compact_str: str) -> list[PieceState]:
-        def convert_piece_state(value: int) -> PieceState:
-            try:
-                return PieceState(value)
-            except ValueError:
-                return PieceState.PENDING_DOWNLOAD
-        return [convert_piece_state(int(char)) for char in compact_str]
+    def deserialize_piece_states(compact_str: str) -> list[bool]:
+        return [char == "1" for char in compact_str]
 
     def to_dict(self):
         return {
             'sha256_hash': self.sha256_hash,
             'torrent_name': self.torrent_name,
             'base_path': self.base_path,
-            'piece_states': ''.join(str(state.value) for state in self.piece_states)
+            'piece_states': self.serialize_piece_states(self.piece_states)
         }
 
     @classmethod
@@ -78,7 +67,7 @@ class EphemeralTorrentState:
 
     @classmethod
     def from_torrent_structure(cls, torrent_structure: TorrentStructure, base_path: str, torrent_name: str,
-                               initial_piece_state: PieceState):
+                               initial_piece_state: bool):
         torrent_json = json.dumps(torrent_structure.to_dict())
         sha256_hash = base62_sha256_hash_of(torrent_json.encode("utf-8"))
         piece_states = [initial_piece_state] * len(torrent_structure.pieces)
@@ -86,16 +75,20 @@ class EphemeralTorrentState:
         return cls(torrent_structure, torrent_json, persistent_torrent_state)
 
 
-class AnnouncementTorrentState:
-    sha256_hash: str
-    piece_states: list[bool]
+# States
 
-    def __init__(self, sha256_hash: str, piece_states: list[bool]):
-        self.sha256_hash = sha256_hash
-        self.piece_states = piece_states
 
-    def __repr__(self):
-        return f"AnnouncementTorrentState(sha256_hash={self.sha256_hash}, piece_states={self.piece_states})"
+class NodeEphemeralPeerState:
+    peer_name: (str, int)
+    peer_info: PeerInfo
+    torrent_states: dict[str, list[bool]]
+    send_lock: threading.Lock
+
+    def __init__(self, peer_name: (str, int)):
+        self.peer_name = peer_name
+        self.peer_info = PeerInfo()
+        self.torrent_states = {}
+        self.send_lock = threading.Lock()
 
     @staticmethod
     def serialize_piece_states(piece_states: list[bool]) -> str:
@@ -116,37 +109,11 @@ class AnnouncementTorrentState:
                 states.append(bool((byte >> (7 - i)) & 1))
         return states
 
-    def to_dict(self):
-        return {
-            'sha256_hash': self.sha256_hash,
-            'piece_states': self.serialize_piece_states(self.piece_states)
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        return cls(
-            sha256_hash=data['sha256_hash'],
-            piece_states=cls.deserialize_piece_states(data['piece_states'])
-        )
-
-
-# States
-
-
-class NodeEphemeralPeerState:
-    peer_name: (str, int)
-    peer_info: PeerInfo
-    torrent_states: list[AnnouncementTorrentState]
-    send_lock: threading.Lock
-
-    def __init__(self, peer_name: (str, int)):
-        self.peer_name = peer_name
-        self.peer_info = PeerInfo()
-        self.torrent_states = []
-        self.send_lock = threading.Lock()
-
     def has_piece(self, sha256_hash: str, piece_index: int):
-        return any(piece_index < len(s.piece_states) and sha256_hash == s.sha256_hash and s.piece_states[piece_index] for s in self.torrent_states)
+        if sha256_hash not in self.torrent_states:
+            return False
+        torrent_state = self.torrent_states[sha256_hash]
+        return piece_index < len(torrent_state) and torrent_state[piece_index]
 
 
 class TrackerEphemeralPeerState:
@@ -163,13 +130,7 @@ class TrackerEphemeralPeerState:
 
 
 class PendingPieceDownload:
-    torrent_state: EphemeralTorrentState
-    piece_index: int
-
     requested_to: socket.socket
 
-    def __init__(self, torrent_state: EphemeralTorrentState, piece_index: int, requested_to: socket.socket):
-        self.torrent_state = torrent_state
-        self.piece_index = piece_index
+    def __init__(self, requested_to: socket.socket):
         self.requested_to = requested_to
-        self.failed_peers = []
