@@ -2,7 +2,6 @@ import base64
 import json
 import socket
 import threading
-from enum import Enum
 
 from hashing import base62_sha256_hash_of
 from peer_info import PeerInfo

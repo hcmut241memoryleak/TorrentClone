@@ -172,7 +172,7 @@ class IoThread(QThread):
                         structure_data = bin_file.read()
                     true_hash = base62_sha256_hash_of(structure_data)
                     if true_hash != apparent_unescaped_sha256_hash:
-                        print(f"I/O thread: SHA256 hash of torrent structure file {e} doesn't match its own filename. Skipping.")
+                        print(f"I/O thread: SHA256 hash of torrent structure file {file} doesn't match its own filename. Skipping.")
                         continue
                     structure_json = structure_data.decode("utf-8")
                     structure = TorrentStructure.from_dict(json.loads(structure_json))
@@ -586,7 +586,7 @@ class IoThread(QThread):
                         self.process_pending_pieces()
                         self.ui_update_torrents_view()
                     else:
-                        self.ui_thread_inbox.emit(("io_error", f"Error trying to import torrent: path `{path}` is not a file"))
+                        self.ui_thread_inbox.emit(("io_error", f"Error trying to import torrent: path `{torrent_file_path}` is not a file"))
                 elif message_type == "ui_open_torrent_location":
                     _, torrent_hash = message
                     if torrent_hash in self.torrent_states:
