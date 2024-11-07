@@ -260,8 +260,6 @@ class IoThread(QThread):
             self.executor.submit(self.mass_send_json_message, socks, "peer_torrent_announcement", node_announcement_message)
 
     def process_pending_pieces(self):
-        print("process_pending_pieces called")
-
         pending_piece_list_limit = 16
         per_peer_request_limit = 16
 
@@ -316,9 +314,6 @@ class IoThread(QThread):
                             pending_piece.requested_to = target_sock
 
                             self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock, torrent_sha256_hash, piece_index)
-
-        for (a, b), c in self.pending_piece_downloads.items():
-            print(f"Pending piece: {a.persistent_state.torrent_name} # {b} <- {c in self.peers}")
 
     def request_piece_from_peer(self, peer_sock: socket.socket, peer_socket_lock: threading.Lock, torrent_sha256_hash: str, piece_index: int):
         outgoing_msg = (torrent_sha256_hash, piece_index)
@@ -514,7 +509,7 @@ class IoThread(QThread):
         keep_running = True
         while keep_running:
             try:
-                message = self.io_thread_inbox.get(timeout=0.1)
+                message = self.io_thread_inbox.get(timeout=1)
                 message_type = message[0]
 
                 if message_type == "self_peer_socket_connected":
