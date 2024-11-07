@@ -15,7 +15,7 @@ TRACKER_PORT = 65432
 main_thread_inbox = queue.Queue()
 
 
-def send_bytes(harbor: Harbor, sock: socket, socket_lock: threading.Lock, b: bytes):
+def send_bytes(harbor: Harbor, sock: socket.socket, socket_lock: threading.Lock, b: bytes):
     peer_name = "(broken socket)"
     try:
         peer_name = sock.getpeername()
@@ -26,11 +26,16 @@ def send_bytes(harbor: Harbor, sock: socket, socket_lock: threading.Lock, b: byt
         harbor.socket_receiver_queue_remove_client_command(sock)
 
 
-def send_message(harbor: Harbor, sock: socket, socket_lock: threading.Lock, message):
+def send_message(harbor: Harbor, sock: socket.socket, socket_lock: threading.Lock, tag: str, data: bytes):
+    tag_bytes = tag.encode("utf-8")
+    packed_data = struct.pack(">II", len(tag_bytes), len(data)) + tag_bytes + data
+    send_bytes(harbor, sock, socket_lock, packed_data)
+
+
+def send_json_message(harbor: Harbor, sock: socket.socket, socket_lock: threading.Lock, tag: str, message):
     try:
-        json_message = json.dumps(message).encode("utf-8")
-        packed_data = struct.pack(">I", len(json_message)) + json_message
-        send_bytes(harbor, sock, socket_lock, packed_data)
+        json_data = json.dumps(message).encode("utf-8")
+        send_message(harbor, sock, socket_lock, tag, json_data)
     except Exception as e:
         print(f"Error serializing message `{message}`: {e}")
         return
@@ -60,7 +65,7 @@ def main():
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected.")
                 peers[sock] = TrackerEphemeralPeerState(peer_name)
 
-                executor.submit(send_message, harbor, sock, peers[sock].send_lock, ("motd", "From central tracker: have a great day!"))
+                executor.submit(send_message, harbor, sock, peers[sock].send_lock, "motd", json.dumps("From central tracker: have a great day!").encode("utf-8"))
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name, caused_by_stop = message
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} disconnected.")
@@ -82,7 +87,17 @@ def main():
                             try:
                                 sha256_hashes = json.loads(msg.decode("utf-8"))
                                 peers[sock].sha256_hashes = sha256_hashes
-                                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(sha256_hashes)} torrents")
+                                print(
+                                    f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(sha256_hashes)} torrents")
+
+                                if peers[sock].peer_info.is_filled():
+                                    other_peers = [
+                                        (other_state.peer_info.peer_id, other_state.peer_name[0],
+                                         other_state.peer_info.peer_port) for other_sock, other_state in peers.items() if
+                                        other_state.peer_info.is_filled() and other_state.peer_info.peer_id != peers[
+                                            sock].peer_info.peer_id
+                                    ]
+                                    executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers", other_peers)
                             except Exception as e:
                                 pass
                     else:

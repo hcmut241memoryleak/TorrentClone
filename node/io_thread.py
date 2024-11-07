@@ -13,7 +13,7 @@ from harbor import Harbor
 from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_filesys_unescape_uppercase, \
     base62_sha256_hash_of
 from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PieceState, AnnouncementTorrentState, \
-    PersistentTorrentState
+    PersistentTorrentState, PendingPieceDownload
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
@@ -27,14 +27,25 @@ TORRENT_STRUCTURE_FILE_SUFFIX = ".torj"
 PERSISTENT_TORRENT_STATE_FILE_SUFFIX = ".ptors"
 
 
-def files_from_path(base_path: str):
-    if os.path.isfile(base_path):
-        new_base_path = os.path.dirname(base_path)
-        return new_base_path, [os.path.relpath(base_path, new_base_path)]
+def find_common_base(paths):
+    directories = [os.path.dirname(path) for path in paths]
+    base = directories[0]
+    for dir_path in directories[1:]:
+        while not dir_path.startswith(base):
+            base = os.path.dirname(base)
+    return base
+
+
+def files_from_path(raw_path: str):
+    base_path = os.path.dirname(raw_path)
+    file_or_folder_name = os.path.relpath(raw_path, base_path)
+    if os.path.isfile(raw_path):
+        return base_path, [file_or_folder_name]
 
     file_paths = []
-    for root, dirs, files in os.walk(base_path):
+    for root, dirs, files in os.walk(raw_path):
         for file in files:
+            # Notice how I'm using base_path instead of raw_path in the relpath call here.
             file_paths.append(os.path.relpath(str(os.path.join(root, file)), base_path))  # TODO: why str()?
     return base_path, file_paths
 
@@ -68,6 +79,27 @@ def create_ephemeral_torrent_state_from_path(raw_path: str, torrent_name: str, p
     return EphemeralTorrentState.from_torrent_structure(torrent_structure, base_path, torrent_name, PieceState.COMPLETE)
 
 
+def create_ephemeral_torrent_state_from_torrent_structure_file(path: str, save_path: str, torrent_name: str):
+    with open(path, "rb") as file:
+        torrent_json_bytes = file.read()
+        torrent_json = torrent_json_bytes.decode("utf-8")
+        torrent_structure = TorrentStructure.from_dict(json.loads(torrent_json))
+
+    sha256_hash = base62_sha256_hash_of(torrent_json_bytes)
+
+    if torrent_name == "":
+        if len(torrent_structure.files) == 1:
+            torrent_name = os.path.basename(torrent_structure.files[0].path)
+        else:
+            torrent_name = os.path.basename(find_common_base([file.path for file in torrent_structure.files]))
+    if torrent_name == "":
+        torrent_name = f"(hash {sha256_hash})"
+
+    piece_states = [PieceState.PENDING_DOWNLOAD] * len(torrent_structure.pieces)
+    persistent_state = PersistentTorrentState(sha256_hash, save_path, torrent_name, piece_states)
+    return EphemeralTorrentState(torrent_structure, torrent_json, persistent_state)
+
+
 class IoThread(QThread):
     ui_thread_inbox = pyqtSignal(object)
     io_thread_inbox: queue.Queue
@@ -80,6 +112,8 @@ class IoThread(QThread):
     harbor: Harbor
     executor: ThreadPoolExecutor
 
+    pending_piece_downloads: list[PendingPieceDownload]
+
     peer_port: int
     appdata_path: str
 
@@ -87,11 +121,14 @@ class IoThread(QThread):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
         self.tracker_socket_lock = threading.Lock()
+
         self.peers = {}
         self.torrent_states = {}
+
+        self.pending_piece_downloads = []
+
         self.peer_port = int(port_str)
         self.appdata_path = os.path.join(os.getcwd(), appdata_str)
-        print(self.appdata_path)
 
     def load_torrent_states_from_disk(self):
         folder = os.path.join(self.appdata_path, "torrents")
@@ -137,14 +174,13 @@ class IoThread(QThread):
         #         file.write(json_dump)
 
     def save_torrent_states_to_disk(self):
-        if not os.path.exists(self.appdata_path):
-            os.mkdir(self.appdata_path)
         for sha256_hash, ephemeral_state in self.torrent_states.items():
             escaped_hash = win_filesys_escape_uppercase(sha256_hash)
 
             state_filepath = os.path.join(self.appdata_path, f"torrents/{escaped_hash}{PERSISTENT_TORRENT_STATE_FILE_SUFFIX}")
             state_json_dump = json.dumps(ephemeral_state.persistent_state.to_dict()).encode("utf-8")
             try:
+                os.makedirs(os.path.dirname(state_filepath), exist_ok=True)
                 with open(state_filepath, "wb") as file:
                     file.write(state_json_dump)
             except Exception as e:
@@ -172,6 +208,14 @@ class IoThread(QThread):
             self.ui_thread_inbox.emit(("io_error", error_string))
             self.harbor.socket_receiver_queue_remove_client_command(sock)
 
+    def connect_to_peer(self, target_host: str, target_port: int):
+        try:
+            peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            peer_socket.connect((target_host, target_port))
+            self.io_thread_inbox.put(("self_peer_socket_connected", peer_socket))
+        except Exception as e:
+            pass
+
     def send_message(self, sock: socket.socket, socket_lock: threading.Lock, tag: str, data: bytes):
         tag_bytes = tag.encode("utf-8")
         packed_data = struct.pack(">II", len(tag_bytes), len(data)) + tag_bytes + data
@@ -191,7 +235,7 @@ class IoThread(QThread):
         try:
             json_data = json.dumps(message).encode("utf-8")
             tag_bytes = tag.encode("utf-8")
-            packed_data = struct.pack(">II", len(tag_bytes) + len(json_data)) + tag_bytes + json_data
+            packed_data = struct.pack(">II", len(tag_bytes), len(json_data)) + tag_bytes + json_data
         except Exception as e:
             error_string = f"Error serializing message `{message}`: {e}"
             print(error_string)
@@ -224,6 +268,61 @@ class IoThread(QThread):
             socks = [(sock, state.send_lock) for sock, state in self.peers.items()]
             self.executor.submit(self.mass_send_json_message, socks, "peer_torrent_announcement", node_announcement_message)
 
+    def process_pending_pieces(self):
+        pending_piece_list_limit = 16
+
+        per_peer_request_count: dict[socket.socket, int] = {}
+
+        for torrent_sha256_hash, torrent_state in self.torrent_states.items():
+            if len(self.pending_piece_downloads) >= pending_piece_list_limit:
+                break
+            for piece_index in range(len(torrent_state.torrent_structure.pieces)):
+                if len(self.pending_piece_downloads) >= pending_piece_list_limit:
+                    break
+                if torrent_state.persistent_state.piece_states[piece_index] == PieceState.PENDING_DOWNLOAD:
+                    # now is the time to check if the piece is actually downloadable: there needs to be someone who has the piece
+                    target_sock: socket.socket | None = None
+                    for sock, peer_state in self.peers.items():
+                        if sock in per_peer_request_count:
+                            if per_peer_request_count[sock] > 16:
+                                continue
+                            else:
+                                per_peer_request_count[sock] = per_peer_request_count[sock] + 1
+                        else:
+                            per_peer_request_count[sock] = 1
+                        target_sock = sock
+                        break
+
+                    existing_pending_piece_index: int | None = None
+                    for p_i, p in enumerate(self.pending_piece_downloads):
+                        if p.torrent_state == torrent_state and p.piece_index == piece_index:
+                            existing_pending_piece_index = p_i
+                            break
+
+                    if existing_pending_piece_index is None:
+                        if target_sock is not None:
+                            # it's downloadable but it's not downloaded yet
+                            existing_pending_piece = PendingPieceDownload(torrent_state, piece_index, target_sock)
+                            self.pending_piece_downloads.append(existing_pending_piece)
+
+                            self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock, torrent_sha256_hash, piece_index)
+                    else:
+                        existing_pending_piece = self.pending_piece_downloads[existing_pending_piece_index]
+                        if target_sock is None:
+                            # it ain't downloadable anymore, begone.
+                            del self.pending_piece_downloads[existing_pending_piece_index]
+                        elif existing_pending_piece.requested_to not in self.peers:
+                            existing_pending_piece.requested_to = target_sock
+
+                            self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock, torrent_sha256_hash, piece_index)
+
+        for q in self.pending_piece_downloads:
+            print(f"Pending piece: {q.torrent_state.persistent_state.torrent_name} # {q.piece_index} <- {q.requested_to in self.peers}")
+
+    def request_piece_from_peer(self, peer_sock: socket.socket, peer_socket_lock: threading.Lock, torrent_sha256_hash: str, piece_index: int):
+        outgoing_msg = (torrent_sha256_hash, piece_index)
+        self.executor.submit(self.send_json_message, peer_sock, peer_socket_lock, "peer_request_piece", outgoing_msg)
+
     def send_piece_to_peer(self, ephemeral_torrent_state: EphemeralTorrentState, piece_index: int, peer_sock: socket.socket, peer_socket_lock: threading.Lock):
         if piece_index < len(ephemeral_torrent_state.persistent_state.piece_states) and ephemeral_torrent_state.persistent_state.piece_states[piece_index] == PieceState.COMPLETE:
             base_path = ephemeral_torrent_state.persistent_state.base_path
@@ -236,11 +335,27 @@ class IoThread(QThread):
             outgoing_msg += ephemeral_torrent_state.persistent_state.sha256_hash.encode("utf-8")
             outgoing_msg += piece_data
 
-            self.send_message(peer_sock, peer_socket_lock, "peer_piece_contents", outgoing_msg)
+            self.executor.submit(self.send_message, peer_sock, peer_socket_lock, "peer_piece_contents", outgoing_msg)
 
     def merge_piece(self, ephemeral_torrent_state: EphemeralTorrentState, piece_index: int, piece_data: bytes):
+        piece = ephemeral_torrent_state.torrent_structure.pieces[piece_index]
+        current_piece_offset = 0
+        for section in piece.sections:
+            torrent_file = ephemeral_torrent_state.torrent_structure.files[section.file_index]
+            file_path = os.path.join(ephemeral_torrent_state.persistent_state.base_path, torrent_file.path)
+            if os.path.exists(file_path) and not os.path.isfile(file_path):
+                return # ?????
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "wb+") as file:
+                file.seek(section.file_offset)
+                file.write(piece_data[current_piece_offset:current_piece_offset+section.length])
 
-        pass
+                current_size = file.tell()
+                target_length = torrent_file.byte_count
+                if current_size < target_length:
+                    file.seek(target_length - 1)
+                    file.write(b'\0')
+            current_piece_offset += section.length
 
     def on_peer_info(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
         if sock in self.peers:
@@ -256,10 +371,21 @@ class IoThread(QThread):
         try:
             torrent_states = [AnnouncementTorrentState.from_dict(d) for d in json.loads(msg.decode("utf-8"))]
             self.peers[sock].torrent_states = torrent_states
-            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
+            # print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
+            self.process_pending_pieces()
             self.ui_update_peers_view()
         except Exception as e:
             pass
+
+    def on_peer_request_piece(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
+        if sock in self.peers:
+            try:
+                sha256_hash, piece_index = json.loads(msg.decode("utf-8"))
+                if sha256_hash in self.torrent_states:
+                    torrent_state = self.torrent_states[sha256_hash]
+                    self.send_piece_to_peer(torrent_state, piece_index, sock, self.peers[sock].send_lock)
+            except Exception as e:
+                pass
 
     def on_peer_piece_contents(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
         try:
@@ -295,7 +421,14 @@ class IoThread(QThread):
             if apparent_sha1_piece_hash != known_sha1_piece_hash:
                 return
 
+            for pending_piece_index in range(len(self.pending_piece_downloads)):
+                ppd = self.pending_piece_downloads[pending_piece_index]
+                if ppd.torrent_state == torrent_state and ppd.piece_index == piece_index:
+                    del self.pending_piece_downloads[pending_piece_index]
+                    break
             self.merge_piece(torrent_state, piece_index, piece_data)
+            torrent_state.persistent_state.piece_states[piece_index] = PieceState.COMPLETE
+            self.process_pending_pieces()
 
         except Exception as e:
             pass
@@ -305,6 +438,11 @@ class IoThread(QThread):
             if tag == "motd":
                 motd = json.loads(msg.decode("utf-8"))
                 print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
+            elif tag == "peers":
+                peer_list = json.loads(msg.decode("utf-8"))
+                for peer_id, peer_host, peer_port in peer_list:
+                    if not any(peer_id == p.peer_info.peer_id for p in self.peers.values()):
+                        self.executor.submit(self.connect_to_peer, peer_host, peer_port)
             else:
                 print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent unknown message `{tag}` with {len(msg)} bytes")
         else:
@@ -312,6 +450,8 @@ class IoThread(QThread):
                 self.on_peer_info(sock, peer_name, msg)
             elif tag == "peer_torrent_announcement":
                 self.on_peer_torrent_announcement(sock, peer_name, msg)
+            elif tag == "peer_request_piece":
+                self.on_peer_request_piece(sock, peer_name, msg)
             elif tag == "peer_piece_contents":
                 self.on_peer_piece_contents(sock, peer_name, msg)
             else:
@@ -351,6 +491,7 @@ class IoThread(QThread):
         self.ui_thread_inbox.emit("io_hi")
 
         if len(self.torrent_states) > 0:
+            self.process_pending_pieces()
             self.ui_update_torrents_view()
             self.announce_torrents_to_tracker()
 
@@ -363,6 +504,10 @@ class IoThread(QThread):
             try:
                 message = self.io_thread_inbox.get(timeout=0.1)
                 message_type = message[0]
+
+                if message_type == "self_peer_socket_connected":
+                    _, sock = message
+                    self.harbor.socket_receiver_queue_add_client_command(sock)
 
                 if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
@@ -385,6 +530,7 @@ class IoThread(QThread):
                             stop_requested = True
                     else:
                         del self.peers[sock]
+                        self.process_pending_pieces()
                         self.ui_update_peers_view()
 
                 elif message_type == "harbor_message":
@@ -399,11 +545,29 @@ class IoThread(QThread):
                     if os.path.exists(path):
                         ephemeral_state = create_ephemeral_torrent_state_from_path(path, torrent_name, piece_size)
                         self.torrent_states[ephemeral_state.persistent_state.sha256_hash] = ephemeral_state
+                        self.process_pending_pieces() # not necessary because there's nothing to download but whatever, habit
                         self.announce_torrents_to_tracker()
                         self.announce_torrents_to_peers()
                         self.ui_update_torrents_view()
                     else:
                         self.ui_thread_inbox.emit(("io_error", f"Error trying to create torrent: path `{path}` doesn't exist"))
+                elif message_type == "ui_import_torrent":
+                    _, torrent_file_path, save_path, torrent_name = message
+                    # TODO: check if torrent_file_path is under appdata/torrents just in case the user is an idiot and imports from within there
+                    if os.path.isfile(torrent_file_path):
+                        ephemeral_state = create_ephemeral_torrent_state_from_torrent_structure_file(torrent_file_path, save_path, torrent_name)
+
+                        if ephemeral_state.persistent_state.sha256_hash in self.torrent_states:
+                            self.ui_thread_inbox.emit(("io_error", f"Error trying to import torrent: torrent of hash {ephemeral_state.persistent_state.sha256_hash} is already imported"))
+                            return
+
+                        self.torrent_states[ephemeral_state.persistent_state.sha256_hash] = ephemeral_state
+                        self.announce_torrents_to_tracker()
+                        self.announce_torrents_to_peers()
+                        self.process_pending_pieces()
+                        self.ui_update_torrents_view()
+                    else:
+                        self.ui_thread_inbox.emit(("io_error", f"Error trying to import torrent: path `{path}` is not a file"))
 
                 elif message == "ui_quit":
                     stop_requested = True
@@ -416,11 +580,10 @@ class IoThread(QThread):
             if current_time - last_reannounced_torrents_to_peers >= 2: # reannounce every 2 seconds
                 last_reannounced_torrents_to_peers = current_time
                 self.announce_torrents_to_peers()
-            # Reannouncements to tracker is currently disabled! I will only reannounce when torrents are added/removed.
-            # It is up to the peers to individually announce to each other about their torrent progresses (i.e. piece states).
-            # if current_time - last_reannounced_torrents_to_tracker >= 10: # reannounce every 10 seconds
-            #     last_reannounced_torrents_to_tracker = current_time
-            #     self.announce_torrents_to_tracker()
+            if current_time - last_reannounced_torrents_to_tracker >= 10: # reannounce every 10 seconds
+                last_reannounced_torrents_to_tracker = current_time
+                if len(self.torrent_states) > 0:
+                    self.announce_torrents_to_tracker()
 
             if stop_requested:
                 stop_requested = False

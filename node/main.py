@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushBut
     QLineEdit, QComboBox, QListWidget, QListWidgetItem
 
 from hashing import win_filesys_escape_uppercase, win_filesys_unescape_uppercase, base62_sha256_hash_of
-from node.io_thread import IoThread
+from node.io_thread import IoThread, TORRENT_STRUCTURE_FILE_SUFFIX
 from node.torrenting import EphemeralTorrentState, PieceState
 
 io_thread_inbox = queue.Queue()
@@ -130,6 +130,94 @@ class TorrentCreationDialog(QDialog):
             self.close()
 
 
+class TorrentImportDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        # "Name" | Name
+        torrent_naming_layout = QHBoxLayout()
+        self.torrent_naming_label = QLabel("Name")
+        torrent_naming_layout.addWidget(self.torrent_naming_label)
+
+        self.torrent_naming_input = QLineEdit()
+        self.torrent_naming_input.setPlaceholderText("Name (uses file/folder name if left empty)")
+        torrent_naming_layout.addWidget(self.torrent_naming_input)
+
+        layout.addLayout(torrent_naming_layout)
+
+        # Path | Select file
+
+        torrent_file_path_layout = QHBoxLayout()
+
+        self.torrent_file_path_label = QLabel("Path")
+        torrent_file_path_layout.addWidget(self.torrent_file_path_label)
+
+        self.torrent_file_path_input = QLineEdit()
+        self.torrent_file_path_input.setPlaceholderText("Path to torrent file")
+        torrent_file_path_layout.addWidget(self.torrent_file_path_input)
+
+        self.torrent_file_button = QPushButton("Select file")
+        self.torrent_file_button.clicked.connect(self.select_torrent_file)
+        torrent_file_path_layout.addWidget(self.torrent_file_button, 0)
+
+        layout.addLayout(torrent_file_path_layout)
+
+        # Save path | Select folder
+
+        save_path_layout = QHBoxLayout()
+
+        self.save_path_label = QLabel("Save to")
+        save_path_layout.addWidget(self.save_path_label)
+
+        self.save_path_input = QLineEdit()
+        self.save_path_input.setPlaceholderText("Path to save torrent contents")
+        save_path_layout.addWidget(self.save_path_input)
+
+        self.save_path_button = QPushButton("Select folder")
+        self.save_path_button.clicked.connect(self.select_save_path)
+        save_path_layout.addWidget(self.save_path_button, 0)
+
+        layout.addLayout(save_path_layout)
+
+        # Create
+
+        create_layout = QHBoxLayout()
+
+        self.create_button = QPushButton("Import")
+        self.create_button.setMinimumWidth(250)
+        self.create_button.clicked.connect(self.create_torrent)
+        create_layout.addWidget(self.create_button, 0)
+
+        layout.addLayout(create_layout)
+
+        self.setLayout(layout)
+        self.setMinimumWidth(600)
+        self.setWindowTitle("Torrent Creation")
+
+    def select_torrent_file(self):
+        options = QFileDialog.Option.ReadOnly
+        path, _ = QFileDialog.getOpenFileName(self, "Select a file", "", f"Torrent Structure Files (*{TORRENT_STRUCTURE_FILE_SUFFIX});;All Files (*)", options=options)
+        if path:
+            self.torrent_file_path_input.setText(path)
+
+    def select_save_path(self):
+        path = QFileDialog.getExistingDirectory(self, "Select a folder", "")
+        if path:
+            self.save_path_input.setText(path)
+
+    def create_torrent(self):
+        name = self.torrent_naming_input.text()
+        torrent_file_path = self.torrent_file_path_input.text()
+        save_path = self.save_path_input.text()
+        if torrent_file_path != "" and save_path != "":
+            io_thread_inbox.put(("ui_import_torrent", torrent_file_path, save_path, name))
+            self.close()
+
+
 class TorrentListItemWidget(QWidget):
     def __init__(self, torrent_name: str, piece_state: str):
         super().__init__()
@@ -167,9 +255,14 @@ class MainWindow(QWidget):
     def init_ui(self):
         layout = QVBoxLayout()
 
-        self.torrent_button = QPushButton("Create torrent...")
-        self.torrent_button.clicked.connect(self.open_torrent_creation_dialog)
-        layout.addWidget(self.torrent_button)
+        top_buttons_layout = QHBoxLayout()
+        self.create_torrent_button = QPushButton("Create torrent...")
+        self.create_torrent_button.clicked.connect(self.open_torrent_creation_dialog)
+        top_buttons_layout.addWidget(self.create_torrent_button)
+        self.import_torrent_button = QPushButton("Import torrent...")
+        self.import_torrent_button.clicked.connect(self.open_torrent_import_dialog)
+        top_buttons_layout.addWidget(self.import_torrent_button)
+        layout.addLayout(top_buttons_layout)
 
         magnet_link_layout = QHBoxLayout()
         self.magnet_link_input = QLineEdit()
@@ -178,9 +271,9 @@ class MainWindow(QWidget):
         self.add_magnet_link_button = QPushButton("Add magnet link")
         self.add_magnet_link_button.clicked.connect(self.on_add_magnet_link)
         magnet_link_layout.addWidget(self.add_magnet_link_button)
+        layout.addLayout(magnet_link_layout)
 
         self.label = QLabel("Connecting to central tracker...")
-        layout.addLayout(magnet_link_layout)
         layout.addWidget(self.label)
 
         # Add the torrent list widget
@@ -194,6 +287,9 @@ class MainWindow(QWidget):
 
     def open_torrent_creation_dialog(self):
         TorrentCreationDialog().exec()
+
+    def open_torrent_import_dialog(self):
+        TorrentImportDialog().exec()
 
     def on_add_magnet_link(self):
         io_thread_inbox.put(("add_magnet_link", self.magnet_link_input.text()))

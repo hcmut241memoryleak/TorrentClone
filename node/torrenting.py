@@ -1,11 +1,15 @@
 import base64
 import json
+import socket
 import threading
 from enum import Enum
 
 from hashing import base62_sha256_hash_of
 from peer_info import PeerInfo
 from torrent_data import TorrentStructure
+
+
+# Serializables
 
 
 class PieceState(Enum):
@@ -126,6 +130,9 @@ class AnnouncementTorrentState:
         )
 
 
+# States
+
+
 class NodeEphemeralPeerState:
     peer_name: (str, int)
     peer_info: PeerInfo
@@ -137,6 +144,9 @@ class NodeEphemeralPeerState:
         self.peer_info = PeerInfo()
         self.torrent_states = []
         self.send_lock = threading.Lock()
+
+    def has_piece(self, sha256_hash: str, piece_index: int):
+        return any(piece_index < len(s.piece_states) and sha256_hash == s.sha256_hash and s.piece_states[piece_index] for s in self.torrent_states)
 
 
 class TrackerEphemeralPeerState:
@@ -150,3 +160,16 @@ class TrackerEphemeralPeerState:
         self.peer_info = PeerInfo()
         self.sha256_hashes = []
         self.send_lock = threading.Lock()
+
+
+class PendingPieceDownload:
+    torrent_state: EphemeralTorrentState
+    piece_index: int
+
+    requested_to: socket.socket
+
+    def __init__(self, torrent_state: EphemeralTorrentState, piece_index: int, requested_to: socket.socket):
+        self.torrent_state = torrent_state
+        self.piece_index = piece_index
+        self.requested_to = requested_to
+        self.failed_peers = []
