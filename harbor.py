@@ -7,10 +7,21 @@ import threading
 import select
 
 
+class HarborSocketState:
+    is_receiving_message: bool
+    current_message_length: int
+    current_message_buffer: bytes
+
+    def __init__(self):
+        self.is_receiving_message = False
+        self.current_message_length = 0
+        self.current_message_buffer = b""
+
+
 class Harbor:
     __server_socket: socket.socket
     __io_thread_inbox: queue.Queue
-    __connections: set[socket]
+    __connections: dict[socket, HarborSocketState]
     __connections_lock: threading.Lock
     __socket_receiver_daemon_inbox: queue.Queue
     __socket_receiver_daemon_signal_r: socket.socket
@@ -21,7 +32,7 @@ class Harbor:
     def __init__(self, server_socket: socket.socket, io_thread_inbox: queue.Queue):
         self.__server_socket = server_socket
         self.__io_thread_inbox = io_thread_inbox
-        self.__connections = set()
+        self.__connections = dict()
         self.__connections_lock = threading.Lock()
         self.__socket_receiver_daemon_inbox = queue.Queue()
         self.__socket_receiver_daemon_signal_r, self.__socket_receiver_daemon_signal_w = socket.socketpair()
@@ -31,21 +42,32 @@ class Harbor:
     def __handle_incoming_data(self, sock):
         peer_name = sock.getpeername()
         try:
-            raw_msg_len = sock.recv(4)
-            if not raw_msg_len:
-                return False
-            msg_len = struct.unpack(">I", raw_msg_len)[0]
-
-            data = b""
-            while len(data) < msg_len:
-                packet = sock.recv(msg_len - len(data))
-                if not packet:
+            state = self.__connections[sock]
+            if state.is_receiving_message:
+                input_bytes = sock.recv(state.current_message_length - len(state.current_message_buffer))
+                if not input_bytes:
                     return False
-                data += packet
+                state.current_message_buffer += input_bytes
+                if len(state.current_message_buffer) >= state.current_message_length:
+                    json_data = json.loads(state.current_message_buffer.decode("utf-8"))
+                    self.__io_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
 
-            json_data = json.loads(data.decode("utf-8"))
-            self.__io_thread_inbox.put(("harbor_message", sock, peer_name, json_data))
-            return True
+                    state.is_receiving_message = False
+                    state.current_message_buffer = b""
+
+                return True
+            else:
+                input_bytes = sock.recv(4 - len(state.current_message_buffer))
+                if not input_bytes:
+                    return False
+                state.current_message_buffer += input_bytes
+                if len(state.current_message_buffer) >= 4:
+                    state.current_message_length = struct.unpack(">I", state.current_message_buffer)[0]
+
+                    state.is_receiving_message = True
+                    state.current_message_buffer = b""
+
+                return True
 
         except Exception as e:
             print(f"Harbor @ receiver thread: error handling data from {sock.getpeername()}: `{e}`.")
@@ -66,7 +88,7 @@ class Harbor:
     def __socket_receiver_daemon(self):
         while not self.__daemons_stop_event.is_set():
             with self.__connections_lock:
-                monitored_sockets = [self.__socket_receiver_daemon_signal_r, self.__server_socket] + list(self.__connections)
+                monitored_sockets = [self.__socket_receiver_daemon_signal_r, self.__server_socket] + list(self.__connections.keys())
 
             readable_socks, _, _ = select.select(monitored_sockets, [], [], 1)  # Adding a timeout for select
             for selected_sock in readable_socks:
@@ -74,7 +96,7 @@ class Harbor:
                     client_socket, client_address = self.__server_socket.accept()
                     client_socket.settimeout(10)
                     peer_name = client_socket.getpeername()
-                    self.__connections.add(client_socket)
+                    self.__connections[client_socket] = HarborSocketState()
                     self.__io_thread_inbox.put(("harbor_connection_added", client_socket, peer_name))
                 elif selected_sock is self.__socket_receiver_daemon_signal_r:
                     self.__socket_receiver_daemon_signal_r.recv(1)
@@ -85,13 +107,13 @@ class Harbor:
                             if command_type == "+":
                                 command_sock = command[1]
                                 peer_name = command_sock.getpeername()
-                                self.__connections.add(command_sock)
+                                self.__connections[command_sock] = HarborSocketState()
                                 self.__io_thread_inbox.put(("harbor_connection_added", command_sock, peer_name))
                             elif command_type == "-":
                                 command_sock = command[1]
                                 if command_sock in self.__connections:
                                     peer_name = command_sock.getpeername()
-                                    self.__connections.remove(command_sock)
+                                    del self.__connections[command_sock]
                                     try:
                                         command_sock.close()
                                     except Exception as e:
@@ -100,7 +122,7 @@ class Harbor:
                                     self.__io_thread_inbox.put(
                                         ("harbor_connection_removed", command_sock, peer_name, False))
                             elif command_type == "x":
-                                for sock in self.__connections:
+                                for sock in self.__connections.keys():
                                     peer_name = sock.getpeername()
                                     try:
                                         sock.close()
