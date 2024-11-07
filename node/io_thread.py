@@ -1,13 +1,16 @@
 import json
 import os
+import platform
 import queue
 import socket
 import struct
+import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, QUrl
+from PyQt6.QtGui import QDesktopServices
 
 from harbor import Harbor
 from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_filesys_unescape_uppercase, \
@@ -24,6 +27,17 @@ PEER_HOST = '127.0.0.1'
 
 TORRENT_STRUCTURE_FILE_SUFFIX = ".torj"
 PERSISTENT_TORRENT_STATE_FILE_SUFFIX = ".ptors"
+
+
+def highlight_path_in_explorer(directory_path: str):
+    if not os.path.exists(directory_path):
+        return
+    def open_in_explorer():
+        if platform.system() == "Windows":
+            subprocess.Popen(f'explorer /select,"{os.path.abspath(directory_path)}"', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(directory_path))
+    threading.Thread(target=open_in_explorer, daemon=True).start()
 
 
 def find_common_base(paths):
@@ -96,7 +110,7 @@ def create_ephemeral_torrent_state_from_torrent_structure_file(path: str, save_p
 
     piece_states = [False] * len(torrent_structure.pieces)
     persistent_state = PersistentTorrentState(sha256_hash, save_path, torrent_name, piece_states)
-    return EphemeralTorrentState(torrent_structure, torrent_json, persistent_state)
+    return EphemeralTorrentState(torrent_structure, torrent_json, persistent_state, None, None)
 
 
 class IoThread(QThread):
@@ -137,15 +151,16 @@ class IoThread(QThread):
             if file.endswith(PERSISTENT_TORRENT_STATE_FILE_SUFFIX):
                 apparent_escaped_sha256_hash = file[:-len(PERSISTENT_TORRENT_STATE_FILE_SUFFIX)]
 
-                torrent_structure_file = os.path.join(folder, f"{apparent_escaped_sha256_hash}{TORRENT_STRUCTURE_FILE_SUFFIX}")
-                if not os.path.isfile(torrent_structure_file):
+                torrent_structure_file_path = os.path.join(folder, f"{apparent_escaped_sha256_hash}{TORRENT_STRUCTURE_FILE_SUFFIX}")
+                if not os.path.isfile(torrent_structure_file_path):
                     print(f"I/O thread: accompanying torrent structure file for {file} not found. Skipping.")
                     continue
 
                 apparent_unescaped_sha256_hash = win_filesys_unescape_uppercase(apparent_escaped_sha256_hash)
 
+                full_file_path = os.path.join(folder, file)
                 try:
-                    with open(os.path.join(folder, file), "rb") as bin_file:
+                    with open(full_file_path, "rb") as bin_file:
                         persistent_data = bin_file.read()
                     persistent_state = PersistentTorrentState.from_dict(json.loads(persistent_data.decode("utf-8")))
                 except Exception as e:
@@ -153,7 +168,7 @@ class IoThread(QThread):
                     continue
 
                 try:
-                    with open(os.path.join(folder, torrent_structure_file), "rb") as bin_file:
+                    with open(torrent_structure_file_path, "rb") as bin_file:
                         structure_data = bin_file.read()
                     true_hash = base62_sha256_hash_of(structure_data)
                     if true_hash != apparent_unescaped_sha256_hash:
@@ -165,7 +180,7 @@ class IoThread(QThread):
                     print(f"I/O thread: could not load torrent structure file {file}: {e}. Skipping.")
                     continue
 
-                self.torrent_states[true_hash] = EphemeralTorrentState(structure, structure_json, persistent_state)
+                self.torrent_states[true_hash] = EphemeralTorrentState(structure, structure_json, persistent_state, torrent_structure_file_path, full_file_path)
 
     def save_torrent_states_to_disk(self):
         for sha256_hash, ephemeral_state in self.torrent_states.items():
@@ -572,6 +587,66 @@ class IoThread(QThread):
                         self.ui_update_torrents_view()
                     else:
                         self.ui_thread_inbox.emit(("io_error", f"Error trying to import torrent: path `{path}` is not a file"))
+                elif message_type == "ui_open_torrent_location":
+                    _, torrent_hash = message
+                    if torrent_hash in self.torrent_states:
+                        torrent_state = self.torrent_states[torrent_hash]
+                        path_to_highlight = ""
+                        if len(torrent_state.torrent_structure.files) == 1:
+                            path_to_highlight = os.path.join(torrent_state.persistent_state.base_path, torrent_state.torrent_structure.files[0].path)
+                        else:
+                            path_to_highlight = find_common_base([file.path for file in torrent_state.torrent_structure.files])
+                            if path_to_highlight == "":
+                                path_to_highlight = torrent_state.persistent_state.base_path
+                            else:
+                                path_to_highlight = os.path.join(torrent_state.persistent_state.base_path, path_to_highlight)
+                        highlight_path_in_explorer(path_to_highlight)
+                elif message_type == "ui_export_torrent":
+                    _, torrent_hash, output_path = message
+                    if torrent_hash in self.torrent_states:
+                        if os.path.isabs(output_path):
+                            torrent_json_encoded = self.torrent_states[torrent_hash].torrent_json.encode("utf-8")
+                            try:
+                                with open(output_path, "wb") as file:
+                                    file.write(torrent_json_encoded)
+                                highlight_path_in_explorer(output_path)
+                            except Exception as e:
+                                pass
+                        else:
+                            self.ui_thread_inbox.emit(("io_error", f"Error trying to export torrent: path `{output_path}` is not absolute"))
+                elif message_type == "ui_rename_torrent":
+                    _, torrent_hash, new_name = message
+                    if torrent_hash in self.torrent_states:
+                        self.torrent_states[torrent_hash].persistent_state.torrent_name = new_name
+                        self.ui_update_torrents_view()
+                elif message_type == "ui_remove_torrent":
+                    _, torrent_hash = message
+                    if torrent_hash in self.torrent_states:
+                        ephemeral_state = self.torrent_states[torrent_hash]
+
+                        del self.torrent_states[torrent_hash]
+                        torrent_piece_pairs_to_delete: list[tuple[EphemeralTorrentState, int]] = []
+                        for torrent_piece_pair, pending_piece_download in self.pending_piece_downloads.items():
+                            if torrent_piece_pair[0] == ephemeral_state:
+                                torrent_piece_pairs_to_delete.append(torrent_piece_pair)
+                        for torrent_piece_pair_to_delete in torrent_piece_pairs_to_delete:
+                            del self.pending_piece_downloads[torrent_piece_pair_to_delete]
+
+                        if ephemeral_state.torrent_json_loaded_from_path is not None:
+                            try:
+                                os.remove(ephemeral_state.torrent_json_loaded_from_path)
+                            except Exception as e:
+                                pass
+                        if ephemeral_state.persistent_state_loaded_from_path is not None:
+                            try:
+                                os.remove(ephemeral_state.persistent_state_loaded_from_path)
+                            except Exception as e:
+                                pass
+
+                        self.announce_torrents_to_tracker()
+                        self.announce_torrents_to_peers()
+                        self.process_pending_pieces()
+                        self.ui_update_torrents_view()
                 elif message == "ui_quit":
                     stop_requested = True
 

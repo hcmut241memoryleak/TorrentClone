@@ -58,12 +58,15 @@ class EphemeralTorrentState:
     torrent_structure: TorrentStructure
     torrent_json: str
     persistent_state: PersistentTorrentState
-    last_announced: None
+    torrent_json_loaded_from_path: str | None
+    persistent_state_loaded_from_path: str | None
 
-    def __init__(self, t: TorrentStructure, torrent_json: str, s: PersistentTorrentState):
-        self.torrent_structure = t
+    def __init__(self, torrent_structure: TorrentStructure, torrent_json: str, persistent_state: PersistentTorrentState, torrent_json_loaded_from_path: str | None, persistent_state_loaded_from_path: str | None):
+        self.torrent_structure = torrent_structure
         self.torrent_json = torrent_json
-        self.persistent_state = s
+        self.persistent_state = persistent_state
+        self.torrent_json_loaded_from_path = torrent_json_loaded_from_path
+        self.persistent_state_loaded_from_path = persistent_state_loaded_from_path
 
     @classmethod
     def from_torrent_structure(cls, torrent_structure: TorrentStructure, base_path: str, torrent_name: str,
@@ -72,7 +75,7 @@ class EphemeralTorrentState:
         sha256_hash = base62_sha256_hash_of(torrent_json.encode("utf-8"))
         piece_states = [initial_piece_state] * len(torrent_structure.pieces)
         persistent_torrent_state = PersistentTorrentState(sha256_hash, base_path, torrent_name, piece_states)
-        return cls(torrent_structure, torrent_json, persistent_torrent_state)
+        return cls(torrent_structure, torrent_json, persistent_torrent_state, None, None)
 
 
 # States
