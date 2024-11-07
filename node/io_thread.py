@@ -21,7 +21,7 @@ TARGET_TRACKER_HOST = '127.0.0.1'
 TARGET_TRACKER_PORT = 65432
 
 PEER_HOST = '127.0.0.1'
-PEER_PORT = 65433
+# PEER_PORT = 65433
 
 TORRENT_STRUCTURE_FILE_SUFFIX = ".torj"
 PERSISTENT_TORRENT_STATE_FILE_SUFFIX = ".ptors"
@@ -80,15 +80,18 @@ class IoThread(QThread):
     harbor: Harbor
     executor: ThreadPoolExecutor
 
+    peer_port: int
     appdata_path: str
 
-    def __init__(self, io_thread_inbox: queue.Queue):
+    def __init__(self, io_thread_inbox: queue.Queue, port_str: str, appdata_str: str):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
         self.tracker_socket_lock = threading.Lock()
         self.peers = {}
         self.torrent_states = {}
-        self.appdata_path = os.path.join(os.getcwd(), "appdata")
+        self.peer_port = int(port_str)
+        self.appdata_path = os.path.join(os.getcwd(), appdata_str)
+        print(self.appdata_path)
 
     def load_torrent_states_from_disk(self):
         folder = os.path.join(self.appdata_path, "torrents")
@@ -229,7 +232,90 @@ class IoThread(QThread):
             piece_size = ephemeral_torrent_state.torrent_structure.piece_size
             piece_data = get_piece_data(base_path, files, piece, piece_size)
 
+            outgoing_msg = struct.pack(">II", len(ephemeral_torrent_state.persistent_state.sha256_hash), piece_index)
+            outgoing_msg += ephemeral_torrent_state.persistent_state.sha256_hash.encode("utf-8")
+            outgoing_msg += piece_data
 
+            self.send_message(peer_sock, peer_socket_lock, "peer_piece_contents", outgoing_msg)
+
+    def merge_piece(self, ephemeral_torrent_state: EphemeralTorrentState, piece_index: int, piece_data: bytes):
+
+        pass
+
+    def on_peer_info(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
+        if sock in self.peers:
+            try:
+                info = PeerInfo.from_dict(json.loads(msg.decode("utf-8")))
+                self.peers[sock].peer_info = info
+                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
+                self.ui_update_peers_view()
+            except Exception as e:
+                pass
+
+    def on_peer_torrent_announcement(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
+        try:
+            torrent_states = [AnnouncementTorrentState.from_dict(d) for d in json.loads(msg.decode("utf-8"))]
+            self.peers[sock].torrent_states = torrent_states
+            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
+            self.ui_update_peers_view()
+        except Exception as e:
+            pass
+
+    def on_peer_piece_contents(self, sock: socket.socket, peer_name: tuple[str, int], msg: bytes):
+        try:
+            preamble_length = 8
+            if len(msg) < preamble_length:
+                return
+
+            sha256_hash_bytes_len, piece_index = struct.unpack(">II", msg[:preamble_length])
+            if len(msg) - preamble_length < sha256_hash_bytes_len:
+                return
+
+            sha256_hash_bytes = msg[preamble_length:preamble_length+sha256_hash_bytes_len]
+            sha256_hash = sha256_hash_bytes.decode("utf-8")
+
+
+            if sha256_hash not in self.torrent_states:
+                return
+
+            torrent_state = self.torrent_states[sha256_hash]
+            piece_size = torrent_state.torrent_structure.piece_size
+
+            if piece_index >= len(torrent_state.torrent_structure.pieces):
+                return
+            if torrent_state.persistent_state.piece_states[piece_index] != PieceState.PENDING_DOWNLOAD:
+                return
+
+            if len(msg) - 8 - sha256_hash_bytes_len != piece_size:
+                return
+
+            piece_data = msg[8+sha256_hash_bytes_len:]
+            apparent_sha1_piece_hash = base62_sha1_hash_of(piece_data)
+            known_sha1_piece_hash = torrent_state.torrent_structure.pieces[piece_index].base_62_sha1
+            if apparent_sha1_piece_hash != known_sha1_piece_hash:
+                return
+
+            self.merge_piece(torrent_state, piece_index, piece_data)
+
+        except Exception as e:
+            pass
+
+    def on_harbor_message(self, sock: socket.socket, peer_name: tuple[str, int], tag: str, msg: bytes):
+        if sock == self.tracker_socket:
+            if tag == "motd":
+                motd = json.loads(msg.decode("utf-8"))
+                print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
+            else:
+                print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent unknown message `{tag}` with {len(msg)} bytes")
+        else:
+            if tag == "peer_info":
+                self.on_peer_info(sock, peer_name, msg)
+            elif tag == "peer_torrent_announcement":
+                self.on_peer_torrent_announcement(sock, peer_name, msg)
+            elif tag == "peer_piece_contents":
+                self.on_peer_piece_contents(sock, peer_name, msg)
+            else:
+                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
 
     def run(self):
         self.load_torrent_states_from_disk()
@@ -239,14 +325,14 @@ class IoThread(QThread):
 
         my_peer_info = PeerInfo()
         my_peer_info.peer_id = my_peer_id
-        my_peer_info.peer_port = PEER_PORT
+        my_peer_info.peer_port = self.peer_port
 
         self.executor = ThreadPoolExecutor(max_workers=16)
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((PEER_HOST, PEER_PORT))
+        server_socket.bind((PEER_HOST, self.peer_port))
         server_socket.listen()
-        print(f"I/O thread: listening on {PEER_HOST}:{PEER_PORT} for other peers...")
+        print(f"I/O thread: listening on {PEER_HOST}:{self.peer_port} for other peers...")
 
         self.harbor = Harbor(server_socket, self.io_thread_inbox)
         self.harbor.start()
@@ -303,32 +389,7 @@ class IoThread(QThread):
 
                 elif message_type == "harbor_message":
                     _, sock, peer_name, tag, msg = message
-                    if sock == self.tracker_socket:
-                        if tag == "motd":
-                            motd = json.loads(msg.decode("utf-8"))
-                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent MOTD: `{motd}`")
-                        else:
-                            print(f"I/O thread: tracker {peer_name[0]}:{peer_name[1]} sent unknown message `{tag}` with {len(msg)} bytes")
-                    else:
-                        if tag == "peer_info":
-                            if sock in self.peers:
-                                try:
-                                    info = PeerInfo.from_dict(json.loads(msg.decode("utf-8")))
-                                    self.peers[sock].peer_info = info
-                                    print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent info: {info}")
-                                    self.ui_update_peers_view()
-                                except Exception as e:
-                                    pass
-                        elif tag == "peer_torrent_announcement":
-                            try:
-                                torrent_states = [AnnouncementTorrentState.from_dict(d) for d in json.loads(msg.decode("utf-8"))]
-                                self.peers[sock].torrent_states = torrent_states
-                                print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
-                                self.ui_update_peers_view()
-                            except Exception as e:
-                                pass
-                        else:
-                            print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} sent: {msg}")
+                    self.on_harbor_message(sock, peer_name, tag, msg)
 
                 elif message == "harbor_stopped":
                     keep_running = False

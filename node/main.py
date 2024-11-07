@@ -2,6 +2,7 @@ import os.path
 import queue
 import sys
 
+from PyQt6.QtCore import QCommandLineParser, QCommandLineOption
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox, QListWidget, QListWidgetItem
@@ -154,11 +155,11 @@ class TorrentListItemWidget(QWidget):
 
 
 class MainWindow(QWidget):
-    def __init__(self):
+    def __init__(self, port_str: str, appdata_str: str):
         super().__init__()
         self.init_ui()
 
-        self.io_thread = IoThread(io_thread_inbox)
+        self.io_thread = IoThread(io_thread_inbox, port_str, appdata_str)
         self.io_thread.ui_thread_inbox.connect(self.on_message_received)
         self.io_thread.io_thread_inbox = io_thread_inbox
         self.io_thread.start()
@@ -249,7 +250,15 @@ class MainWindow(QWidget):
 
 def main():
     app = QApplication(sys.argv)
-    main_window = MainWindow()
+
+    parser = QCommandLineParser()
+    port_option = QCommandLineOption("port", "The port that other peers should connect to.", "port", "65433")
+    appdata_option = QCommandLineOption("appdata", "App data location", "appdata", "appdata")
+    parser.addOption(port_option)
+    parser.addOption(appdata_option)
+    parser.process(app)
+
+    main_window = MainWindow(parser.value(port_option), parser.value(appdata_option))
     main_window.show()
     sys.exit(app.exec())
 
