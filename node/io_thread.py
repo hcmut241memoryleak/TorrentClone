@@ -366,15 +366,21 @@ class IoThread(QThread):
             if not isinstance(torrent_states, dict):
                 return
             deserialized: dict[str, list[bool]] = {}
+            has_any_hashes_in_common = False
             for sha256_hash, serialized_piece_states in torrent_states.items():
                 if not isinstance(sha256_hash, str) or not isinstance(serialized_piece_states, str):
                     return
+                if sha256_hash in self.torrent_states:
+                    has_any_hashes_in_common = True
                 deserialized[sha256_hash] = NodeEphemeralPeerState.deserialize_piece_states(serialized_piece_states)
 
-            self.peers[sock].torrent_states = torrent_states
-            # print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(torrent_states)} torrents")
-            self.process_pending_pieces()
-            self.ui_update_peers_view()
+            if not has_any_hashes_in_common:
+                # Kick peer for not having any torrents in common
+                self.harbor.socket_receiver_queue_remove_client_command(sock)
+            else:
+                self.peers[sock].torrent_states = torrent_states
+                self.process_pending_pieces()
+                self.ui_update_peers_view()
         except Exception as e:
             pass
 
@@ -400,7 +406,6 @@ class IoThread(QThread):
 
             sha256_hash_bytes = msg[preamble_length:preamble_length+sha256_hash_bytes_len]
             sha256_hash = sha256_hash_bytes.decode("utf-8")
-
 
             if sha256_hash not in self.torrent_states:
                 return
@@ -573,7 +578,7 @@ class IoThread(QThread):
                 pass
 
             current_time = time.time()
-            if current_time - last_reannounced_torrents_to_peers >= 2: # reannounce every 2 seconds
+            if current_time - last_reannounced_torrents_to_peers >= 5: # reannounce every 2 seconds
                 last_reannounced_torrents_to_peers = current_time
                 if len(self.torrent_states) > 0:
                     self.announce_torrents_to_peers()

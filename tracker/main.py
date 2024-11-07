@@ -90,13 +90,17 @@ def main():
                                 print(
                                     f"I/O thread: peer {peer_name[0]}:{peer_name[1]} announced: {len(sha256_hashes)} torrents")
 
-                                if peers[sock].peer_info.is_filled():
-                                    other_peers = [
-                                        (other_state.peer_info.peer_id, other_state.peer_name[0],
-                                         other_state.peer_info.peer_port) for other_sock, other_state in peers.items() if
-                                        other_state.peer_info.is_filled() and other_state.peer_info.peer_id != peers[
-                                            sock].peer_info.peer_id
-                                    ]
+                                peer_state = peers[sock]
+                                if peer_state.peer_info.is_filled():
+                                    other_peers = []
+                                    for other_sock, other_state in peers.items():
+                                        if not other_state.peer_info.is_filled():
+                                            continue
+                                        if other_state.peer_info.peer_id == peer_state.peer_info.peer_id:
+                                            continue
+                                        if not any(sha256_hash in peer_state.sha256_hashes for sha256_hash in other_state.sha256_hashes):
+                                            continue
+                                        other_peers.append((other_state.peer_info.peer_id, other_state.peer_name[0], other_state.peer_info.peer_port))
                                     executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers", other_peers)
                             except Exception as e:
                                 pass
