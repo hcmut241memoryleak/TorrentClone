@@ -260,6 +260,8 @@ class IoThread(QThread):
             self.executor.submit(self.mass_send_json_message, socks, "peer_torrent_announcement", node_announcement_message)
 
     def process_pending_pieces(self):
+        print("process_pending_pieces called")
+
         pending_piece_list_limit = 16
         per_peer_request_limit = 16
 
@@ -267,8 +269,14 @@ class IoThread(QThread):
 
         torrent_piece_pairs_to_delete: list[tuple[EphemeralTorrentState, int]] = []
         for torrent_piece_pair, pending_piece_download in self.pending_piece_downloads.items():
-            if pending_piece_download.requested_to not in self.peers:
+            req_sock = pending_piece_download.requested_to
+            if req_sock not in self.peers:
                 torrent_piece_pairs_to_delete.append(torrent_piece_pair)
+            else:
+                if req_sock in per_peer_request_count:
+                    per_peer_request_count[req_sock] = per_peer_request_count[req_sock] + 1
+                else:
+                    per_peer_request_count[req_sock] = 1
         for torrent_piece_pair_to_delete in torrent_piece_pairs_to_delete:
             del self.pending_piece_downloads[torrent_piece_pair_to_delete]
 
