@@ -160,7 +160,7 @@ class IoThread(QThread):
                 print(f"I/O thread: could not write file {structure_filepath}: {e}. Data loss.")
                 continue
 
-    def send_bytes(self, sock: socket, socket_lock: threading.Lock, b: bytes):
+    def send_bytes(self, sock: socket.socket, socket_lock: threading.Lock, b: bytes):
         peer_name = "(broken socket)"
         try:
             peer_name = sock.getpeername()
@@ -172,12 +172,12 @@ class IoThread(QThread):
             self.ui_thread_inbox.emit(("io_error", error_string))
             self.harbor.socket_receiver_queue_remove_client_command(sock)
 
-    def send_message(self, sock: socket, socket_lock: threading.Lock, tag: str, data: bytes):
+    def send_message(self, sock: socket.socket, socket_lock: threading.Lock, tag: str, data: bytes):
         tag_bytes = tag.encode("utf-8")
         packed_data = struct.pack(">II", len(tag_bytes), len(data)) + tag_bytes + data
         self.send_bytes(sock, socket_lock, packed_data)
 
-    def send_json_message(self, sock: socket, socket_lock: threading.Lock, tag: str, message):
+    def send_json_message(self, sock: socket.socket, socket_lock: threading.Lock, tag: str, message):
         try:
             json_data = json.dumps(message).encode("utf-8")
             self.send_message(sock, socket_lock, tag, json_data)
@@ -187,7 +187,7 @@ class IoThread(QThread):
             self.ui_thread_inbox.emit(("io_error", error_string))
             return
 
-    def mass_send_json_message(self, socks: list[tuple[socket, threading.Lock]], tag: str, message):
+    def mass_send_json_message(self, socks: list[tuple[socket.socket, threading.Lock]], tag: str, message):
         try:
             json_data = json.dumps(message).encode("utf-8")
             tag_bytes = tag.encode("utf-8")
