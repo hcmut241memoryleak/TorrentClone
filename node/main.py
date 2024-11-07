@@ -202,7 +202,9 @@ class TorrentImportDialog(QDialog):
 
     def select_torrent_file(self):
         options = QFileDialog.Option.ReadOnly
-        path, _ = QFileDialog.getOpenFileName(self, "Select a file", "", f"Torrent Structure Files (*{TORRENT_STRUCTURE_FILE_SUFFIX});;All Files (*)", options=options)
+        path, _ = QFileDialog.getOpenFileName(self, "Select a file", "",
+                                              f"Torrent Structure Files (*{TORRENT_STRUCTURE_FILE_SUFFIX});;All Files (*)",
+                                              options=options)
         if path:
             self.torrent_file_path_input.setText(path)
 
@@ -370,10 +372,14 @@ class TorrentListWidget(QListWidget):
             torrent_hash, torrent_name = item.data(Qt.ItemDataRole.UserRole)
 
             context_menu = QMenu(self)
-            open_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), "Open file location", self)
-            export_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton), "Export torrent", self)
-            rename_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "Rename torrent", self)
-            remove_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon), "Remove torrent", self)
+            open_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), "Open file location",
+                                  self)
+            export_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+                                    "Export torrent", self)
+            rename_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder),
+                                    "Rename torrent", self)
+            remove_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon), "Remove torrent",
+                                    self)
 
             open_action.triggered.connect(lambda: self.open_torrent_location(torrent_hash, torrent_name))
             export_action.triggered.connect(lambda: self.export_torrent(torrent_hash, torrent_name))

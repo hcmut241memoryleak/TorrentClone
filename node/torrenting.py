@@ -60,7 +60,8 @@ class EphemeralTorrentState:
     torrent_json_loaded_from_path: str | None
     persistent_state_loaded_from_path: str | None
 
-    def __init__(self, torrent_structure: TorrentStructure, torrent_json: str, persistent_state: PersistentTorrentState, torrent_json_loaded_from_path: str | None, persistent_state_loaded_from_path: str | None):
+    def __init__(self, torrent_structure: TorrentStructure, torrent_json: str, persistent_state: PersistentTorrentState,
+                 torrent_json_loaded_from_path: str | None, persistent_state_loaded_from_path: str | None):
         self.torrent_structure = torrent_structure
         self.torrent_json = torrent_json
         self.persistent_state = persistent_state

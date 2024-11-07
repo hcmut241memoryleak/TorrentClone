@@ -39,5 +39,6 @@ def win_filesys_unescape_uppercase(s: str) -> str:
 def base62_sha1_hash_of(b: bytes):
     return to_base62(int.from_bytes(hashlib.sha1(b).digest(), 'big'))
 
+
 def base62_sha256_hash_of(b: bytes):
     return to_base62(int.from_bytes(hashlib.sha256(b).digest(), 'big'))

@@ -65,7 +65,8 @@ def main():
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected.")
                 peers[sock] = TrackerEphemeralPeerState(peer_name)
 
-                executor.submit(send_message, harbor, sock, peers[sock].send_lock, "motd", json.dumps("From central tracker: have a great day!").encode("utf-8"))
+                executor.submit(send_message, harbor, sock, peers[sock].send_lock, "motd",
+                                json.dumps("From central tracker: have a great day!").encode("utf-8"))
             elif message_type == "harbor_connection_removed":
                 _, sock, peer_name, caused_by_stop = message
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} disconnected.")
@@ -98,11 +99,14 @@ def main():
                                             continue
                                         if other_state.peer_info.peer_id == peer_state.peer_info.peer_id:
                                             continue
-                                        if not any(sha256_hash in peer_state.sha256_hashes for sha256_hash in other_state.sha256_hashes):
+                                        if not any(sha256_hash in peer_state.sha256_hashes for sha256_hash in
+                                                   other_state.sha256_hashes):
                                             continue
-                                        other_peers.append((other_state.peer_info.peer_id, other_state.peer_name[0], other_state.peer_info.peer_port))
+                                        other_peers.append((other_state.peer_info.peer_id, other_state.peer_name[0],
+                                                            other_state.peer_info.peer_port))
                                     if len(other_peers) > 0:
-                                        executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers", other_peers)
+                                        executor.submit(send_json_message, harbor, sock, peers[sock].send_lock, "peers",
+                                                        other_peers)
                             except Exception as e:
                                 pass
                     else:

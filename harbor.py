@@ -1,4 +1,3 @@
-import json
 import queue
 import socket
 import struct
@@ -91,7 +90,8 @@ class Harbor:
     def __socket_receiver_daemon(self):
         while not self.__daemons_stop_event.is_set():
             with self.__connections_lock:
-                monitored_sockets = [self.__socket_receiver_daemon_signal_r, self.__server_socket] + list(self.__connections.keys())
+                monitored_sockets = [self.__socket_receiver_daemon_signal_r, self.__server_socket] + list(
+                    self.__connections.keys())
 
             readable_socks, _, _ = select.select(monitored_sockets, [], [], 1)  # Adding a timeout for select
             for selected_sock in readable_socks:
