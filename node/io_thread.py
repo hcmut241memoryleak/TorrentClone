@@ -266,7 +266,7 @@ class IoThread(QThread):
         self.ui_thread_inbox.emit(("io_peers_changed", self.peers))
 
     def ui_update_torrents_view(self):
-        self.ui_thread_inbox.emit(("io_torrents_changed", self.torrent_states))
+        self.ui_thread_inbox.emit(("io_torrents_changed", [], self.torrent_states))
 
     def announce_torrents_to_tracker(self):
         tracker_announcement_message = [
