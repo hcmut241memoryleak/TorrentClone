@@ -301,30 +301,6 @@ class TorrentHashImportDialog(QDialog):
             self.close()
 
 
-class TorrentListItemWidget(QWidget):
-    def __init__(self, torrent_name: str, piece_state_str: str):
-        super().__init__()
-
-        layout = QVBoxLayout()
-
-        # Torrent name label (larger font)
-        self.name_label = QLabel(torrent_name)
-        name_font = QFont()
-        name_font.setPointSize(12)
-        name_font.setBold(True)
-        self.name_label.setFont(name_font)
-        layout.addWidget(self.name_label)
-
-        # Piece state label (smaller font)
-        self.state_label = QLabel(piece_state_str)
-        state_font = QFont()
-        state_font.setPointSize(10)
-        self.state_label.setFont(state_font)
-        layout.addWidget(self.state_label)
-
-        self.setLayout(layout)
-
-
 class TorrentExportDialog(QDialog):
     torrent_hash: str
     torrent_name: str
@@ -566,7 +542,31 @@ class TorrentHashImportRemoveDialog(QDialog):
         self.close()
 
 
-class TorrentListWidgetItem(QListWidgetItem):
+class TorrentListWidgetTorrentWidget(QWidget):
+    def __init__(self, torrent_name: str, piece_state_str: str):
+        super().__init__()
+
+        layout = QVBoxLayout()
+
+        # Torrent name label (larger font)
+        self.name_label = QLabel(torrent_name)
+        name_font = QFont()
+        name_font.setPointSize(12)
+        name_font.setBold(True)
+        self.name_label.setFont(name_font)
+        layout.addWidget(self.name_label)
+
+        # Piece state label (smaller font)
+        self.state_label = QLabel(piece_state_str)
+        state_font = QFont()
+        state_font.setPointSize(10)
+        self.state_label.setFont(state_font)
+        layout.addWidget(self.state_label)
+
+        self.setLayout(layout)
+
+
+class TorrentListWidgetTorrentItem(QListWidgetItem):
     torrent_hash: str
     torrent_name: str
 
@@ -577,7 +577,31 @@ class TorrentListWidgetItem(QListWidgetItem):
         self.torrent_name = torrent_name
 
 
-class TorrentHashImportItem(QListWidgetItem):
+class TorrentListWidgetTorrentHashImportWidget(QWidget):
+    def __init__(self, torrent_name: str, piece_state_str: str):
+        super().__init__()
+
+        layout = QVBoxLayout()
+
+        # Torrent name label (larger font)
+        self.name_label = QLabel(torrent_name)
+        name_font = QFont()
+        name_font.setPointSize(12)
+        name_font.setBold(True)
+        self.name_label.setFont(name_font)
+        layout.addWidget(self.name_label)
+
+        # Piece state label (smaller font)
+        self.state_label = QLabel(piece_state_str)
+        state_font = QFont()
+        state_font.setPointSize(10)
+        self.state_label.setFont(state_font)
+        layout.addWidget(self.state_label)
+
+        self.setLayout(layout)
+
+
+class TorrentListWidgetTorrentHashImportItem(QListWidgetItem):
     torrent_hash: str
     torrent_name: str
 
@@ -597,7 +621,7 @@ class TorrentListWidget(QListWidget):
         if not item:
             return
 
-        if isinstance(item, TorrentListWidgetItem):
+        if isinstance(item, TorrentListWidgetTorrentItem):
             torrent_hash = item.torrent_hash
             torrent_name = item.torrent_name
 
@@ -626,7 +650,7 @@ class TorrentListWidget(QListWidget):
             context_menu.addAction(remove_action)
 
             context_menu.exec(event.globalPos())
-        elif isinstance(item, TorrentHashImportItem):
+        elif isinstance(item, TorrentListWidgetTorrentHashImportItem):
             torrent_hash = item.torrent_hash
             torrent_name = item.torrent_name
 
@@ -721,7 +745,7 @@ class MainWindow(QWidget):
             _, pending_hash_import_torrents, torrents = message
             self.update_torrent_list(pending_hash_import_torrents, torrents)
 
-    def format_piece_states(self, piece_states: list[bool]) -> str:
+    def format_torrent_status(self, piece_states: list[bool], seeder_count: int) -> str:
         total_pieces = len(piece_states)
         completed_pieces = piece_states.count(True)
 
@@ -729,18 +753,32 @@ class MainWindow(QWidget):
             return "Seeding"
 
         completion_percentage = (completed_pieces / total_pieces) * 100
-        return f"{completion_percentage:.1f}% ({completed_pieces}/{total_pieces} pcs)"
+        if seeder_count > 0:
+            return f"Downloading, {completion_percentage:.1f}% ({completed_pieces}/{total_pieces} pcs)"
+        else:
+            return f"Stalled, {completion_percentage:.1f}% ({completed_pieces}/{total_pieces} pcs)"
 
-    def update_torrent_list(self, pending_hash_import_torrents: list[UiTorrentHashImportState], torrent_states: list[UiTorrentState]):
+    def format_hash_import_status(self, can_be_requested: bool):
+        if can_be_requested:
+            return "Requesting info...."
+        return "Stalled"
+
+    def update_torrent_list(self, torrent_hash_import_states: list[UiTorrentHashImportState], torrent_states: list[UiTorrentState]):
         self.torrent_list.clear()
+        for ui_torrent_hash_import_state in torrent_hash_import_states:
+            formatted_status = self.format_hash_import_status(ui_torrent_hash_import_state.can_be_requested)
+            item_widget = TorrentListWidgetTorrentHashImportWidget(ui_torrent_hash_import_state.torrent_name, formatted_status)
+
+            list_item = TorrentListWidgetTorrentHashImportItem(self.torrent_list, ui_torrent_hash_import_state.sha256_hash, ui_torrent_hash_import_state.torrent_name)
+            list_item.setSizeHint(item_widget.sizeHint())
+            self.torrent_list.addItem(list_item)
+            self.torrent_list.setItemWidget(list_item, item_widget)
         # TODO: UiTorrentHashImportState
         for ui_torrent_state in torrent_states:
-            formatted_piece_states = self.format_piece_states(ui_torrent_state.piece_states)
-            torrent_hash = ui_torrent_state.sha256_hash
-            torrent_name = ui_torrent_state.torrent_name
-            item_widget = TorrentListItemWidget(torrent_name, formatted_piece_states)
+            formatted_status = self.format_torrent_status(ui_torrent_state.piece_states, ui_torrent_state.seeder_count)
+            item_widget = TorrentListWidgetTorrentWidget(ui_torrent_state.torrent_name, formatted_status)
 
-            list_item = TorrentListWidgetItem(self.torrent_list, torrent_hash, torrent_name)
+            list_item = TorrentListWidgetTorrentItem(self.torrent_list, ui_torrent_state.sha256_hash, ui_torrent_state.torrent_name)
             list_item.setSizeHint(item_widget.sizeHint())
             self.torrent_list.addItem(list_item)
             self.torrent_list.setItemWidget(list_item, item_widget)

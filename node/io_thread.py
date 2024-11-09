@@ -17,7 +17,7 @@ from hashing import base62_sha1_hash_of, win_filesys_escape_uppercase, win_files
     base62_sha256_hash_of
 from node.torrenting import EphemeralTorrentState, NodeEphemeralPeerState, PersistentTorrentState, PendingPieceDownload, \
     PersistentTorrentHashImportState, PendingTorrentHashImport
-from node.ui_messages import UiTorrentState
+from node.ui_messages import UiTorrentState, UiTorrentHashImportState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, pack_files_to_pieces, Piece, TorrentStructure
 
@@ -274,7 +274,11 @@ class IoThread(QThread):
 
     def ui_update_torrents_view(self):
         ui_torrent_hash_import_states = [
-
+            UiTorrentHashImportState(
+                sha256_hash,
+                persistent_import_state.torrent_name,
+                sha256_hash in self.pending_torrent_hash_imports
+            ) for sha256_hash, persistent_import_state in self.torrent_hash_import_states.items()
         ]
         ui_torrent_states = [
             UiTorrentState(
