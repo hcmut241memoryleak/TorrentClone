@@ -82,6 +82,45 @@ class PersistentTorrentHashImportState:
         )
 
 
+class PeerToPeerTorrentAnnouncement:
+    hash_import_states: list[str]
+    torrent_states: dict[str, list[bool]]
+
+    def __init__(self, hash_import_states: list[str], torrent_states: dict[str, list[bool]]):
+        self.hash_import_states = hash_import_states
+        self.torrent_states = torrent_states
+
+    @staticmethod
+    def serialize_piece_states(piece_states: list[bool]) -> str:
+        byte_array = bytearray()
+        for i in range(0, len(piece_states), 8):
+            chunk = piece_states[i:i + 8]
+            byte = sum(1 << (7 - j) for j, bit in enumerate(chunk) if bit)
+            byte_array.append(byte)
+        b64_encoded = base64.b64encode(byte_array)
+        return b64_encoded.decode('utf-8')
+
+    @staticmethod
+    def deserialize_piece_states(b64: str) -> list[bool]:
+        byte_array = base64.b64decode(b64)
+        states = []
+        for byte in byte_array:
+            for i in range(8):
+                states.append(bool((byte >> (7 - i)) & 1))
+        return states
+
+    def to_dict(self):
+        return {
+            'hash_import_states': self.hash_import_states,
+            'torrent_states': {key: self.serialize_piece_states(value) for key, value in self.torrent_states.items()}
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        torrent_states = {key: cls.deserialize_piece_states(value) for key, value in data['torrent_states'].items()}
+        return cls(hash_import_states=data['hash_import_states'], torrent_states=torrent_states)
+
+
 # States
 
 
@@ -113,39 +152,22 @@ class EphemeralTorrentState:
 class NodeEphemeralPeerState:
     peer_name: (str, int)
     peer_info: PeerInfo
-    torrent_states: dict[str, list[bool]]
+    last_announcement: PeerToPeerTorrentAnnouncement | None
     send_lock: threading.Lock
 
     def __init__(self, peer_name: (str, int)):
         self.peer_name = peer_name
         self.peer_info = PeerInfo()
-        self.torrent_states = {}
+        self.last_announcement = None
         self.send_lock = threading.Lock()
 
-    @staticmethod
-    def serialize_piece_states(piece_states: list[bool]) -> str:
-        byte_array = bytearray()
-        for i in range(0, len(piece_states), 8):
-            chunk = piece_states[i:i + 8]
-            byte = sum(1 << (7 - j) for j, bit in enumerate(chunk) if bit)
-            byte_array.append(byte)
-        b64_encoded = base64.b64encode(byte_array)
-        return b64_encoded.decode('utf-8')
-
-    @staticmethod
-    def deserialize_piece_states(b64: str) -> list[bool]:
-        byte_array = base64.b64decode(b64)
-        states = []
-        for byte in byte_array:
-            for i in range(8):
-                states.append(bool((byte >> (7 - i)) & 1))
-        return states
-
     def has_piece(self, sha256_hash: str, piece_index: int):
-        if sha256_hash not in self.torrent_states:
+        if self.last_announcement is None:
             return False
-        torrent_state = self.torrent_states[sha256_hash]
-        return piece_index < len(torrent_state) and torrent_state[piece_index]
+        if sha256_hash not in self.last_announcement.torrent_states:
+            return False
+        piece_states = self.last_announcement.torrent_states[sha256_hash]
+        return piece_index < len(piece_states) and piece_states[piece_index]
 
 
 class TrackerEphemeralPeerState:

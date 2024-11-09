@@ -773,7 +773,6 @@ class MainWindow(QWidget):
             list_item.setSizeHint(item_widget.sizeHint())
             self.torrent_list.addItem(list_item)
             self.torrent_list.setItemWidget(list_item, item_widget)
-        # TODO: UiTorrentHashImportState
         for ui_torrent_state in torrent_states:
             formatted_status = self.format_torrent_status(ui_torrent_state.piece_states, ui_torrent_state.seeder_count)
             item_widget = TorrentListWidgetTorrentWidget(ui_torrent_state.torrent_name, formatted_status)

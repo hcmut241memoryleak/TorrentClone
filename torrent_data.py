@@ -99,30 +99,3 @@ class TorrentStructure:
         piece_size = data['piece_size']
         pieces = [Piece.from_dict(piece_data) for piece_data in data['pieces']]
         return cls(files, piece_size, pieces)
-
-
-def pack_files_to_pieces(files: list[TorrentFile], piece_size):
-    pieces = []
-    current_piece = Piece()
-    current_piece_position = 0
-
-    for file_index, file in enumerate(files):
-        current_file_position = 0
-        while current_file_position < file.byte_count:
-            if (file.byte_count - current_file_position) >= (piece_size - current_piece_position):  # need a new piece
-                current_piece.sections.append(
-                    PieceSection(piece_size - current_piece_position, file_index, current_file_position))
-                current_file_position += piece_size - current_piece_position
-                pieces.append(current_piece)
-                current_piece = Piece()
-                current_piece_position = 0
-            else:
-                current_piece.sections.append(
-                    PieceSection(file.byte_count - current_file_position, file_index, current_file_position))
-                current_piece_position += file.byte_count - current_file_position
-                current_file_position = file.byte_count
-
-    if len(current_piece.sections) > 0:
-        pieces.append(current_piece)
-
-    return pieces
