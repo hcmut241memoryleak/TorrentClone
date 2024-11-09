@@ -125,7 +125,6 @@ class TorrentCreationDialog(QDialog):
         path = self.path_input.text()
         if path != "":
             piece_size = list(self.piece_size_choices.keys())[self.piece_size_combobox.currentIndex()]
-            print(piece_size)
             torrent_name = self.torrent_naming_input.text()
             if len(torrent_name) == 0:
                 torrent_name = os.path.basename(path)
