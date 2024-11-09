@@ -7,9 +7,10 @@ from PyQt6.QtGui import QFont, QAction
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog, QDialog, QHBoxLayout, \
     QLineEdit, QComboBox, QListWidget, QListWidgetItem, QMenu, QStyle
 
-from hashing import win_filesys_escape_uppercase
+from hashing import win_filesys_escape_uppercase, is_valid_base62_sha256_hash
 from node.io_thread import IoThread, TORRENT_STRUCTURE_FILE_SUFFIX
 from node.torrenting import EphemeralTorrentState
+from node.ui_messages import UiTorrentState, UiTorrentHashImportState
 
 io_thread_inbox = queue.Queue()
 
@@ -254,27 +255,49 @@ class TorrentHashImportDialog(QDialog):
 
         layout.addLayout(torrent_hash_input_layout)
 
-        # Create
+        # Save path | Select folder
 
-        create_layout = QHBoxLayout()
+        save_path_layout = QHBoxLayout()
 
-        self.create_button = QPushButton("Import by hash")
-        self.create_button.setMinimumWidth(250)
-        self.create_button.clicked.connect(self.import_hash)
-        create_layout.addWidget(self.create_button, 0)
+        self.save_path_label = QLabel("Save torrent contents to")
+        save_path_layout.addWidget(self.save_path_label)
 
-        layout.addLayout(create_layout)
+        self.save_path_input = QLineEdit()
+        self.save_path_input.setPlaceholderText("Path to save torrent contents")
+        save_path_layout.addWidget(self.save_path_input)
+
+        self.save_path_button = QPushButton("Select folder")
+        self.save_path_button.clicked.connect(self.select_save_path)
+        save_path_layout.addWidget(self.save_path_button, 0)
+
+        layout.addLayout(save_path_layout)
+
+        # Import
+
+        import_layout = QHBoxLayout()
+
+        self.import_button = QPushButton("Import by hash")
+        self.import_button.setMinimumWidth(250)
+        self.import_button.clicked.connect(self.import_hash)
+        import_layout.addWidget(self.import_button, 0)
+
+        layout.addLayout(import_layout)
 
         self.setLayout(layout)
         self.setMinimumWidth(600)
         self.setWindowTitle("Torrent Import by Hash")
 
+    def select_save_path(self):
+        path = QFileDialog.getExistingDirectory(self, "Select a folder", "")
+        if path:
+            self.save_path_input.setText(path)
+
     def import_hash(self):
         name = self.torrent_naming_input.text()
-        torrent_file_path = self.torrent_hash_input.text()
+        torrent_hash = self.torrent_hash_input.text()
         save_path = self.save_path_input.text()
-        if torrent_file_path != "" and save_path != "":
-            io_thread_inbox.put(("ui_import_torrent", torrent_file_path, save_path, name))
+        if is_valid_base62_sha256_hash(torrent_hash) and save_path != "":
+            io_thread_inbox.put(("ui_import_torrent_by_hash", torrent_hash, name, save_path))
             self.close()
 
 
@@ -402,15 +425,6 @@ class TorrentRenameDialog(QDialog):
         self.setMinimumWidth(600)
         self.setWindowTitle("Torrent Rename")
 
-    def select_output_torrent_file(self):
-        dialog_caption = f"Select a location to save \"{self.torrent_name}\""
-        default_filename = f"{win_filesys_escape_uppercase(self.torrent_hash)}{TORRENT_STRUCTURE_FILE_SUFFIX}"
-        file_filter = f"Torrent Structure Files (*{TORRENT_STRUCTURE_FILE_SUFFIX});;All Files (*)"
-        options = QFileDialog.Option.ShowDirsOnly
-        path, _ = QFileDialog.getSaveFileName(self, dialog_caption, default_filename, file_filter, options=options)
-        if path:
-            self.new_name_input.setText(path)
-
     def rename_torrent(self):
         new_name = self.new_name_input.text()
         if new_name != "":
@@ -433,8 +447,8 @@ class TorrentRemoveDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout()
 
-        self.torrent_naming_label = QLabel(f"Remove torrent \"{self.torrent_name}\"?")
-        layout.addWidget(self.torrent_naming_label)
+        self.label = QLabel(f"Remove torrent \"{self.torrent_name}\"?")
+        layout.addWidget(self.label)
 
         buttons_layout = QHBoxLayout()
 
@@ -462,7 +476,108 @@ class TorrentRemoveDialog(QDialog):
         self.close()
 
 
+class TorrentHashImportRenameDialog(QDialog):
+    torrent_hash: str
+    torrent_name: str
+
+    def __init__(self, torrent_hash: str, torrent_name: str):
+        super().__init__()
+
+        self.torrent_hash = torrent_hash
+        self.torrent_name = torrent_name
+
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        self.torrent_naming_label = QLabel(f"Rename \"{self.torrent_name}\" to...")
+        layout.addWidget(self.torrent_naming_label)
+
+        new_name_layout = QHBoxLayout()
+
+        self.new_name_label = QLabel("Rename to")
+        new_name_layout.addWidget(self.new_name_label)
+
+        self.new_name_input = QLineEdit()
+        self.new_name_input.setPlaceholderText("New name")
+        new_name_layout.addWidget(self.new_name_input)
+
+        layout.addLayout(new_name_layout)
+
+        self.rename_button = QPushButton("Rename")
+        self.rename_button.setMinimumWidth(250)
+        self.rename_button.clicked.connect(self.rename_torrent)
+
+        layout.addWidget(self.rename_button)
+
+        self.setLayout(layout)
+        self.setMinimumWidth(600)
+        self.setWindowTitle("Torrent Hash Import Rename")
+
+    def rename_torrent(self):
+        new_name = self.new_name_input.text()
+        if new_name != "":
+            io_thread_inbox.put(("ui_rename_torrent_hash_import", self.torrent_hash, new_name))
+            self.close()
+
+
+class TorrentHashImportRemoveDialog(QDialog):
+    torrent_hash: str
+    torrent_name: str
+
+    def __init__(self, torrent_hash: str, torrent_name: str):
+        super().__init__()
+
+        self.torrent_hash = torrent_hash
+        self.torrent_name = torrent_name
+
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        self.label = QLabel(f"Remove torrent import \"{self.torrent_name}\"?")
+        layout.addWidget(self.label)
+
+        buttons_layout = QHBoxLayout()
+
+        self.remove_button = QPushButton("Remove")
+        self.remove_button.setMinimumWidth(250)
+        self.remove_button.clicked.connect(self.remove_torrent)
+        buttons_layout.addWidget(self.remove_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setMinimumWidth(250)
+        self.cancel_button.clicked.connect(self.cancel)
+        buttons_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(buttons_layout)
+
+        self.setLayout(layout)
+        self.setMinimumWidth(600)
+        self.setWindowTitle("Torrent Hash Import Removal")
+
+    def cancel(self):
+        self.close()
+
+    def remove_torrent(self):
+        io_thread_inbox.put(("ui_remove_torrent_hash_import", self.torrent_hash))
+        self.close()
+
+
 class TorrentListWidgetItem(QListWidgetItem):
+    torrent_hash: str
+    torrent_name: str
+
+    def __init__(self, parent, torrent_hash: str, torrent_name: str):
+        super().__init__(parent)
+
+        self.torrent_hash = torrent_hash
+        self.torrent_name = torrent_name
+
+
+class TorrentHashImportItem(QListWidgetItem):
     torrent_hash: str
     torrent_name: str
 
@@ -487,6 +602,8 @@ class TorrentListWidget(QListWidget):
             torrent_name = item.torrent_name
 
             context_menu = QMenu(self)
+            copy_hash_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder), "Copy torrent hash",
+                                  self)
             open_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), "Open file location",
                                   self)
             export_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
@@ -496,13 +613,32 @@ class TorrentListWidget(QListWidget):
             remove_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon), "Remove torrent",
                                     self)
 
+            copy_hash_action.triggered.connect(lambda: QApplication.clipboard().setText(torrent_hash))
             open_action.triggered.connect(lambda: self.open_torrent_location(torrent_hash, torrent_name))
             export_action.triggered.connect(lambda: self.export_torrent(torrent_hash, torrent_name))
             rename_action.triggered.connect(lambda: self.open_rename_torrent_dialog(torrent_hash, torrent_name))
-            remove_action.triggered.connect(lambda: self.remove_torrent(torrent_hash, torrent_name))
+            remove_action.triggered.connect(lambda: self.open_remove_torrent_dialog(torrent_hash, torrent_name))
 
+            context_menu.addAction(copy_hash_action)
             context_menu.addAction(open_action)
             context_menu.addAction(export_action)
+            context_menu.addAction(rename_action)
+            context_menu.addAction(remove_action)
+
+            context_menu.exec(event.globalPos())
+        elif isinstance(item, TorrentHashImportItem):
+            torrent_hash = item.torrent_hash
+            torrent_name = item.torrent_name
+
+            context_menu = QMenu(self)
+            rename_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder),
+                                    "Rename torrent import", self)
+            remove_action = QAction(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon), "Remove torrent import",
+                                    self)
+
+            rename_action.triggered.connect(lambda: self.open_rename_torrent_dialog(torrent_hash, torrent_name))
+            remove_action.triggered.connect(lambda: self.remove_torrent_hash_import(torrent_hash, torrent_name))
+
             context_menu.addAction(rename_action)
             context_menu.addAction(remove_action)
 
@@ -517,8 +653,14 @@ class TorrentListWidget(QListWidget):
     def open_rename_torrent_dialog(self, torrent_hash: str, torrent_name: str):
         TorrentRenameDialog(torrent_hash, torrent_name).exec()
 
-    def remove_torrent(self, torrent_hash: str, torrent_name: str):
+    def open_remove_torrent_dialog(self, torrent_hash: str, torrent_name: str):
         TorrentRemoveDialog(torrent_hash, torrent_name).exec()
+
+    def rename_torrent_hash_import(self, torrent_hash: str, torrent_name: str):
+        TorrentHashImportRenameDialog(torrent_hash, torrent_name).exec()
+
+    def remove_torrent_hash_import(self, torrent_hash: str, torrent_name: str):
+        TorrentHashImportRemoveDialog(torrent_hash, torrent_name).exec()
 
 
 class MainWindow(QWidget):
@@ -541,16 +683,10 @@ class MainWindow(QWidget):
         self.import_torrent_button = QPushButton("Import torrent...")
         self.import_torrent_button.clicked.connect(self.open_torrent_import_dialog)
         top_buttons_layout.addWidget(self.import_torrent_button)
+        self.import_torrent_by_hash_button = QPushButton("Import torrent by hash...")
+        self.import_torrent_by_hash_button.clicked.connect(self.open_torrent_hash_import_dialog)
+        top_buttons_layout.addWidget(self.import_torrent_by_hash_button)
         layout.addLayout(top_buttons_layout)
-
-        by_hash_layout = QHBoxLayout()
-        self.hash_import_input = QLineEdit()
-        self.hash_import_input.setPlaceholderText("Torrent hash")
-        by_hash_layout.addWidget(self.hash_import_input)
-        self.hash_import_button = QPushButton("Get torrent by hash")
-        self.hash_import_button.clicked.connect(self.on_import_by_hash)
-        by_hash_layout.addWidget(self.hash_import_button)
-        layout.addLayout(by_hash_layout)
 
         self.label = QLabel("Connecting to central tracker...")
         layout.addWidget(self.label)
@@ -569,8 +705,8 @@ class MainWindow(QWidget):
     def open_torrent_import_dialog(self):
         TorrentImportDialog().exec()
 
-    def on_import_by_hash(self):
-        io_thread_inbox.put(("ui_import_by_hash", self.hash_import_input.text()))
+    def open_torrent_hash_import_dialog(self):
+        TorrentHashImportDialog().exec()
 
     def on_message_received(self, message):
         message_type = message[0]
@@ -590,17 +726,18 @@ class MainWindow(QWidget):
         completed_pieces = piece_states.count(True)
 
         if completed_pieces == total_pieces:
-            return "Complete"
+            return "Seeding"
 
         completion_percentage = (completed_pieces / total_pieces) * 100
         return f"{completion_percentage:.1f}% ({completed_pieces}/{total_pieces} pcs)"
 
-    def update_torrent_list(self, pending_hash_import_torrents: dict[str, str], torrent_states: dict[str, EphemeralTorrentState]):
+    def update_torrent_list(self, pending_hash_import_torrents: list[UiTorrentHashImportState], torrent_states: list[UiTorrentState]):
         self.torrent_list.clear()
-        for sha256_hash, ephemeral_torrent_state in torrent_states.items():
-            formatted_piece_states = self.format_piece_states(ephemeral_torrent_state.persistent_state.piece_states)
-            torrent_hash = ephemeral_torrent_state.persistent_state.sha256_hash
-            torrent_name = ephemeral_torrent_state.persistent_state.torrent_name
+        # TODO: UiTorrentHashImportState
+        for ui_torrent_state in torrent_states:
+            formatted_piece_states = self.format_piece_states(ui_torrent_state.piece_states)
+            torrent_hash = ui_torrent_state.sha256_hash
+            torrent_name = ui_torrent_state.torrent_name
             item_widget = TorrentListItemWidget(torrent_name, formatted_piece_states)
 
             list_item = TorrentListWidgetItem(self.torrent_list, torrent_hash, torrent_name)
@@ -610,7 +747,7 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         io_thread_inbox.put("ui_quit")
-        self.io_thread.wait()  # Wait for the I/O thread to finish
+        self.io_thread.wait()
         event.accept()
 
 

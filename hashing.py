@@ -1,17 +1,21 @@
 import hashlib
 
+base62_characters = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 
 def to_base62(num):
-    characters = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    base = len(characters)
+    base = len(base62_characters)
     if num == 0:
-        return characters[0]
+        return base62_characters[0]
     result = []
     while num:
         num, rem = divmod(num, base)
-        result.append(characters[rem])
+        result.append(base62_characters[rem])
     return ''.join(reversed(result))
 
+
+def is_valid_base62_sha256_hash(s: str):
+    return len(s) == 43 and not any(c not in base62_characters for c in s)
 
 def win_filesys_escape_uppercase(s: str) -> str:
     escaped = []

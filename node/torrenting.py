@@ -53,6 +53,38 @@ class PersistentTorrentState:
         )
 
 
+class PersistentTorrentHashImportState:
+    sha256_hash: str
+    torrent_name: str
+    base_path: str
+
+    def __init__(self, sha256_hash: str, torrent_name: str, base_path: str):
+        self.sha256_hash = sha256_hash
+        self.torrent_name = torrent_name
+        self.base_path = base_path
+
+    def __repr__(self):
+        return f"PersistentTorrentHashImportState(sha256_hash={self.sha256_hash}, torrent_name={self.torrent_name}, base_path={self.base_path})"
+
+    def to_dict(self):
+        return {
+            'sha256_hash': self.sha256_hash,
+            'torrent_name': self.torrent_name,
+            'base_path': self.base_path
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(
+            sha256_hash=data['sha256_hash'],
+            torrent_name=data['torrent_name'],
+            base_path=data['base_path']
+        )
+
+
+# States
+
+
 class EphemeralTorrentState:
     torrent_structure: TorrentStructure
     torrent_json: str
@@ -76,9 +108,6 @@ class EphemeralTorrentState:
         piece_states = [initial_piece_state] * len(torrent_structure.pieces)
         persistent_torrent_state = PersistentTorrentState(sha256_hash, base_path, torrent_name, piece_states)
         return cls(torrent_structure, torrent_json, persistent_torrent_state, None, None)
-
-
-# States
 
 
 class NodeEphemeralPeerState:
@@ -136,4 +165,11 @@ class PendingPieceDownload:
     requested_to: socket.socket
 
     def __init__(self, requested_to: socket.socket):
+        self.requested_to = requested_to
+
+
+class PendingTorrentHashImport:
+    requested_to: list[socket.socket]
+
+    def __init__(self, requested_to: list[socket.socket]):
         self.requested_to = requested_to
