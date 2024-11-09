@@ -281,7 +281,7 @@ class IoThread(QThread):
         try:
             peer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             peer_socket.connect((target_host, target_port))
-            self.io_thread_inbox.put(("self_peer_socket_connected", peer_socket))
+            self.harbor.socket_receiver_queue_add_client_command(peer_socket)
         except Exception as e:
             traceback.print_exc()
             pass
@@ -752,11 +752,7 @@ class IoThread(QThread):
                 message = self.io_thread_inbox.get(timeout=1)
                 message_type = message[0]
 
-                if message_type == "self_peer_socket_connected":
-                    _, sock = message
-                    self.harbor.socket_receiver_queue_add_client_command(sock)
-
-                elif message_type == "harbor_connection_added":
+                if message_type == "harbor_connection_added":
                     _, sock, peer_name = message
                     if sock != self.tracker_socket:
                         self.peers[sock] = NodeEphemeralPeerState(peer_name)
