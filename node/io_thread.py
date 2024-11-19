@@ -162,6 +162,26 @@ def create_ephemeral_torrent_state_from_torrent_json(torrent_json: str, sha256_h
     return EphemeralTorrentState(torrent_structure, torrent_json, persistent_state, None, None)
 
 
+def merge_piece(base_path: str, files: list[TorrentFile], piece: Piece, piece_data: bytes):
+    current_piece_offset = 0
+    for section in piece.sections:
+        torrent_file = files[section.file_index]
+        file_path = os.path.join(base_path, torrent_file.path)
+        if os.path.exists(file_path) and not os.path.isfile(file_path):
+            return # ?????
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        if not os.path.exists(file_path):
+            with open(file_path, "w+b") as file:
+                target_length = torrent_file.byte_count
+                file.seek(target_length - 1)
+                file.write(b'\0')
+        with open(file_path, "r+b") as file:
+            section_data = piece_data[current_piece_offset:(current_piece_offset + section.length)]
+            file.seek(section.file_offset)
+            file.write(section_data)
+        current_piece_offset += section.length
+
+
 class IoThread(QThread):
     ui_thread_inbox = pyqtSignal(object)
     io_thread_inbox: queue.Queue
@@ -363,8 +383,8 @@ class IoThread(QThread):
     def maintain_request_lists(self):
         # Process piece requests
 
-        pending_piece_list_limit = 16
-        per_peer_piece_request_limit = 16
+        pending_piece_list_limit = 128
+        per_peer_piece_request_limit = 32
 
         per_peer_piece_request_count: dict[socket.socket, int] = {}
 
@@ -380,7 +400,6 @@ class IoThread(QThread):
                     per_peer_piece_request_count[req_sock] = 1
         for torrent_piece_pair_to_delete in torrent_piece_pairs_to_delete:
             del self.pending_piece_downloads[torrent_piece_pair_to_delete]
-            print(f"purger, piece `{torrent_piece_pair_to_delete[0].persistent_state.torrent_name}`#{torrent_piece_pair_to_delete[1]} no longer downloadable")
 
         for torrent_sha256_hash, torrent_state in self.torrent_states.items():
             if len(self.pending_piece_downloads) >= pending_piece_list_limit:
@@ -407,22 +426,18 @@ class IoThread(QThread):
                             # it's downloadable but it's not downloaded yet
                             pending_piece = PendingPieceDownload(target_sock)
                             self.pending_piece_downloads[torrent_state, piece_index] = pending_piece
-                            print(f"requesting `{torrent_state.persistent_state.torrent_name}`#{piece_index} from {self.peers[target_sock].peer_info.peer_id}")
                             self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock,
                                                          torrent_sha256_hash, piece_index)
-                        else:
-                            print(f"piece `{torrent_state.persistent_state.torrent_name}`#{piece_index} not downloadable")
                     else:
                         pending_piece = self.pending_piece_downloads[torrent_state, piece_index]
-                        if target_sock is None:
-                            # it ain't downloadable anymore, begone.
-                            del self.pending_piece_downloads[torrent_state, piece_index]
-                            print(f"`{torrent_state.persistent_state.torrent_name}`#{piece_index} no longer downloadable")
-                        elif pending_piece.requested_to not in self.peers:
-                            pending_piece.requested_to = target_sock
-                            print(f"switching, requesting `{torrent_state.persistent_state.torrent_name}`#{piece_index} from {self.peers[target_sock].peer_info.peer_id}")
-                            self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock,
-                                                         torrent_sha256_hash, piece_index)
+
+                        if pending_piece.requested_to not in self.peers:
+                            if target_sock is None:
+                                # it ain't downloadable anymore, begone.
+                                del self.pending_piece_downloads[torrent_state, piece_index]
+                            else:
+                                pending_piece.requested_to = target_sock
+                                self.request_piece_from_peer(target_sock, self.peers[target_sock].send_lock, torrent_sha256_hash, piece_index)
 
         # Process torrent JSON requests
 
@@ -484,26 +499,6 @@ class IoThread(QThread):
             outgoing_msg += piece_data
 
             self.executor.submit(self.send_message, peer_sock, peer_socket_lock, "peer_piece_contents", outgoing_msg)
-
-    def merge_piece(self, ephemeral_torrent_state: EphemeralTorrentState, piece_index: int, piece_data: bytes):
-        piece = ephemeral_torrent_state.torrent_structure.pieces[piece_index]
-        current_piece_offset = 0
-        for section in piece.sections:
-            torrent_file = ephemeral_torrent_state.torrent_structure.files[section.file_index]
-            file_path = os.path.join(ephemeral_torrent_state.persistent_state.base_path, torrent_file.path)
-            if os.path.exists(file_path) and not os.path.isfile(file_path):
-                return  # ?????
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "wb+") as file:
-                file.seek(section.file_offset)
-                file.write(piece_data[current_piece_offset:current_piece_offset + section.length])
-
-                current_size = file.tell()
-                target_length = torrent_file.byte_count
-                if current_size < target_length:
-                    file.seek(target_length - 1)
-                    file.write(b'\0')
-            current_piece_offset += section.length
 
     def request_torrent_json_from_peers(self, peer_socks: list[tuple[socket.socket, threading.Lock]], torrent_sha256_hash: str):
         outgoing_msg = torrent_sha256_hash
@@ -586,6 +581,8 @@ class IoThread(QThread):
             if piece_index >= len(torrent_state.torrent_structure.pieces):
                 print("peer piece contents msg: piece index out of range")
                 return
+            piece = torrent_state.torrent_structure.pieces[piece_index]
+
             if torrent_state.persistent_state.piece_states[piece_index]:  # already completed this piece
                 print("peer piece contents msg: piece is already completed")
                 return
@@ -596,14 +593,14 @@ class IoThread(QThread):
 
             piece_data = msg[preamble_length + sha256_hash_bytes_len:]
             apparent_sha1_piece_hash = base62_sha1_hash_of(piece_data)
-            known_sha1_piece_hash = torrent_state.torrent_structure.pieces[piece_index].base_62_sha1
+            known_sha1_piece_hash = piece.base_62_sha1
             if apparent_sha1_piece_hash != known_sha1_piece_hash:
                 print("peer piece contents msg: sha1 hash not lining up")
                 return
 
             if (torrent_state, piece_index) in self.pending_piece_downloads:
                 del self.pending_piece_downloads[torrent_state, piece_index]
-            self.merge_piece(torrent_state, piece_index, piece_data)
+            merge_piece(torrent_state.persistent_state.base_path, torrent_state.torrent_structure.files, piece, piece_data)
             torrent_state.persistent_state.piece_states[piece_index] = True # completed
             self.maintain_request_lists()
             # self.announce_torrents_to_all_peers() # of course, if we announced for every piece it would spam
