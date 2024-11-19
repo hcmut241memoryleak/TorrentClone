@@ -6,7 +6,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from harbor import Harbor
-from node.torrenting import TrackerEphemeralPeerState
 from peer_info import PeerInfo
 
 TRACKER_HOST = '0.0.0.0'
@@ -71,6 +70,19 @@ def replace_localhost_with_local_ip(peer_ip: str) -> str:
         if local_network_ip:
             return local_network_ip
     return peer_ip
+
+
+class TrackerEphemeralPeerState:
+    peer_name: (str, int)
+    peer_info: PeerInfo
+    sha256_hashes: list[str]
+    send_lock: threading.Lock
+
+    def __init__(self, peer_name: (str, int)):
+        self.peer_name = peer_name
+        self.peer_info = PeerInfo()
+        self.sha256_hashes = []
+        self.send_lock = threading.Lock()
 
 
 def main():
