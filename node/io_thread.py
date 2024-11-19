@@ -22,10 +22,10 @@ from node.ui_messages import UiTorrentState, UiTorrentHashImportState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, Piece, TorrentStructure, PieceSection
 
-TARGET_TRACKER_HOST = '127.0.0.1'
+TARGET_TRACKER_HOST = '192.168.1.100' # TODO: make this a flag!
 TARGET_TRACKER_PORT = 65432
 
-PEER_HOST = '127.0.0.1'
+PEER_HOST = '0.0.0.0'
 # PEER_PORT = 65433
 
 TORRENT_STRUCTURE_FILE_SUFFIX = ".torj"

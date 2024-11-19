@@ -9,7 +9,7 @@ from harbor import Harbor
 from node.torrenting import TrackerEphemeralPeerState
 from peer_info import PeerInfo
 
-TRACKER_HOST = '127.0.0.1'
+TRACKER_HOST = '0.0.0.0'
 TRACKER_PORT = 65432
 
 main_thread_inbox = queue.Queue()
@@ -41,6 +41,38 @@ def send_json_message(harbor: Harbor, sock: socket.socket, socket_lock: threadin
         return
 
 
+def is_localhost(ip_address: str) -> bool:
+    if ip_address in ("127.0.0.1", "::1"):
+        return True
+
+    try:
+        local_hostnames = [socket.gethostname(), socket.getfqdn()]
+        local_ips = socket.gethostbyname_ex(socket.gethostname())[2]
+        local_ips += [socket.gethostbyname(host) for host in local_hostnames]
+
+        return ip_address in local_ips
+    except socket.error:
+        return False
+
+
+def get_local_network_ip() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        return local_ip
+    except socket.error:
+        return None
+
+
+def replace_localhost_with_local_ip(peer_ip: str) -> str:
+    if is_localhost(peer_ip):
+        local_network_ip = get_local_network_ip()
+        if local_network_ip:
+            return local_network_ip
+    return peer_ip
+
+
 def main():
     executor = ThreadPoolExecutor(max_workers=5)
 
@@ -63,7 +95,7 @@ def main():
             if message_type == "harbor_connection_added":
                 _, sock, peer_name = message
                 print(f"I/O thread: peer {peer_name[0]}:{peer_name[1]} connected.")
-                peers[sock] = TrackerEphemeralPeerState(peer_name)
+                peers[sock] = TrackerEphemeralPeerState((replace_localhost_with_local_ip(peer_name[0]), peer_name[1]))
 
                 executor.submit(send_message, harbor, sock, peers[sock].send_lock, "motd",
                                 json.dumps("From central tracker: have a great day!").encode("utf-8"))
