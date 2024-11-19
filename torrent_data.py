@@ -2,7 +2,7 @@ class TorrentFile:
     path: str
     byte_count: int
 
-    def __init__(self, path, byte_count):
+    def __init__(self, path: str, byte_count: int):
         self.path = path
         self.byte_count = byte_count
 
@@ -25,7 +25,7 @@ class PieceSection:
     file_index: int
     file_offset: int
 
-    def __init__(self, length, file_index, file_offset):
+    def __init__(self, length: int, file_index: int, file_offset: int):
         self.length = length
         self.file_index = file_index
         self.file_offset = file_offset
