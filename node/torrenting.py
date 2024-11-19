@@ -170,19 +170,6 @@ class NodeEphemeralPeerState:
         return piece_index < len(piece_states) and piece_states[piece_index]
 
 
-class TrackerEphemeralPeerState:
-    peer_name: (str, int)
-    peer_info: PeerInfo
-    sha256_hashes: list[str]
-    send_lock: threading.Lock
-
-    def __init__(self, peer_name: (str, int)):
-        self.peer_name = peer_name
-        self.peer_info = PeerInfo()
-        self.sha256_hashes = []
-        self.send_lock = threading.Lock()
-
-
 class PendingPieceDownload:
     requested_to: socket.socket
 
