@@ -687,11 +687,11 @@ class TorrentListWidget(QListWidget):
 
 
 class MainWindow(QWidget):
-    def __init__(self, port_str: str, appdata_str: str):
+    def __init__(self, port_str: str, appdata_str: str, target_tracker_host: str):
         super().__init__()
         self.init_ui()
 
-        self.io_thread = IoThread(io_thread_inbox, port_str, appdata_str)
+        self.io_thread = IoThread(io_thread_inbox, port_str, appdata_str, target_tracker_host)
         self.io_thread.ui_thread_inbox.connect(self.on_message_received)
         self.io_thread.io_thread_inbox = io_thread_inbox
         self.io_thread.start()
@@ -796,12 +796,14 @@ def main():
     port_option = QCommandLineOption("port", "The port that other peers should connect to.", "port", "65433")
     appdata_option = QCommandLineOption("appdata", "App data location.", "appdata", "appdata")
     window_title_suffix_option = QCommandLineOption("window-title-suffix", "Window title suffix.", "suffix")
+    target_tracker_host_option = QCommandLineOption("target-tracker-host", "Target tracker IP.", "target", "localhost")
     parser.addOption(port_option)
     parser.addOption(appdata_option)
     parser.addOption(window_title_suffix_option)
+    parser.addOption(target_tracker_host_option)
     parser.process(app)
 
-    main_window = MainWindow(parser.value(port_option), parser.value(appdata_option))
+    main_window = MainWindow(parser.value(port_option), parser.value(appdata_option), parser.value(target_tracker_host_option))
     if parser.isSet(window_title_suffix_option):
         window_title = f"{window_title} - {parser.value(window_title_suffix_option)}"
     main_window.setWindowTitle(window_title)

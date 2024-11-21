@@ -22,7 +22,6 @@ from node.ui_messages import UiTorrentState, UiTorrentHashImportState
 from peer_info import generate_unique_id, PeerInfo
 from torrent_data import TorrentFile, Piece, TorrentStructure, PieceSection
 
-TARGET_TRACKER_HOST = '192.168.1.100' # TODO: make this a flag!
 TARGET_TRACKER_PORT = 65432
 
 PEER_HOST = '0.0.0.0'
@@ -202,7 +201,9 @@ class IoThread(QThread):
     peer_port: int
     appdata_path: str
 
-    def __init__(self, io_thread_inbox: queue.Queue, port_str: str, appdata_str: str):
+    target_tracker_host: str
+
+    def __init__(self, io_thread_inbox: queue.Queue, port_str: str, appdata_str: str, target_tracker_host: str):
         super().__init__()
         self.io_thread_inbox = io_thread_inbox
 
@@ -217,6 +218,8 @@ class IoThread(QThread):
 
         self.peer_port = int(port_str)
         self.appdata_path = os.path.join(os.getcwd(), appdata_str)
+
+        self.target_tracker_host = target_tracker_host
 
     def load_torrent_states_from_disk(self):
         folder = os.path.join(self.appdata_path, "torrents")
@@ -720,14 +723,16 @@ class IoThread(QThread):
         self.harbor = Harbor(server_socket, self.io_thread_inbox)
         self.harbor.start()
 
+        print((self.target_tracker_host, TARGET_TRACKER_PORT))
+
         self.tracker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self.tracker_socket.connect((TARGET_TRACKER_HOST, TARGET_TRACKER_PORT))
+            self.tracker_socket.connect((self.target_tracker_host, TARGET_TRACKER_PORT))
         except Exception as e:
             self.ui_thread_inbox.emit(("io_error", f"Error connecting to central tracker: {e}"))
             return
         print(
-            f"I/O thread: tracker {TARGET_TRACKER_HOST}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
+            f"I/O thread: tracker {self.target_tracker_host}:{TARGET_TRACKER_PORT} connected. Adding to Harbor and sending info.")
         self.harbor.socket_receiver_queue_add_client_command(self.tracker_socket)
         self.executor.submit(self.send_json_message, self.tracker_socket, self.tracker_socket_lock, "peer_info",
                              my_peer_info.to_dict())
